@@ -1,0 +1,14 @@
+*.py[co]
+__pycache__/
+
+videos/
+models/
+environments/
+examples/
+docs/
+scratch/
+
+.ruff_cache
+.mypy_cache
+
+*.mp4
