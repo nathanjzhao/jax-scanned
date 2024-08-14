@@ -16,6 +16,7 @@ class GymnaxWrapper(object):
 
     def __init__(self, env):
         self._env = env
+        self.name = "Hopper-v4"
 
     # provide proxy access to regular attributes of wrapped object
     def __getattr__(self, name):

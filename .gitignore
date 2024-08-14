@@ -12,3 +12,4 @@ scratch/
 .mypy_cache
 
 *.mp4
+tfjs_model/

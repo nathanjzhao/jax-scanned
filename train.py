@@ -11,7 +11,7 @@ from typing import Sequence, NamedTuple
 from flax.training.train_state import TrainState
 import distrax
 from brax.envs import State
-from environment import HumanoidEnv
+from environment import ClipAction, HumanoidEnv, NormalizeVecObservation, NormalizeVecReward, VecEnv
 
 
 class ActorCritic(nn.Module):
@@ -150,8 +150,7 @@ def make_train(config):
                 rng, _rng = jax.random.split(rng)
                 rng_step = jax.random.split(_rng, config["NUM_ENVS"])
 
-                clipped_action = jnp.clip(action, -1.0, 1.0)
-                env_state = step_fn(env_state, clipped_action, rng_step)
+                env_state = step_fn(env_state, action, rng_step)
 
                 # Normalizing observations improves training
                 obs = env_state.obs
@@ -338,7 +337,7 @@ if __name__ == "__main__":
         "NUM_ENVS": 2048,
         "NUM_STEPS": 10,
         # "TOTAL_TIMESTEPS": 2048 * 2000,
-        "TOTAL_TIMESTEPS": 5e7,
+        "TOTAL_TIMESTEPS": 5e8,
         "UPDATE_EPOCHS": 4,
         "NUM_MINIBATCHES": 32,
         "GAMMA": 0.99,
