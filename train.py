@@ -15,29 +15,41 @@ from environment import ClipAction, HumanoidEnv, NormalizeVecObservation, Normal
 
 
 class ActorCritic(nn.Module):
+    # dimension of the action space
     action_dim: Sequence[int]
+    #activation function
     activation: str = "tanh"
 
+    #allows model to be defined in the forward pass function (__call__)
     @nn.compact
     def __call__(self, x):
+        #sets the activation function
         if self.activation == "relu":
             activation = nn.relu
         else:
             activation = nn.tanh
+        
+        #dense layer with 256 units. orthogonal initialization can lead to better perf
         actor_mean = nn.Dense(
             256, kernel_init=orthogonal(np.sqrt(2)), bias_init=constant(0.0)
         )(x)
+        #apply activation
         actor_mean = activation(actor_mean)
+        #repeat
         actor_mean = nn.Dense(
             256, kernel_init=orthogonal(np.sqrt(2)), bias_init=constant(0.0)
         )(actor_mean)
         actor_mean = activation(actor_mean)
+        #creates a final layer w/ units equal to action dim. scale at 0.01 for inductive bias towards initially conservative actions (?)
         actor_mean = nn.Dense(
             self.action_dim, kernel_init=orthogonal(0.01), bias_init=constant(0.0)
         )(actor_mean)
+
+        #creates a multivariate normal distribution using the computed mean and logstd
         actor_logtstd = self.param("log_std", nn.initializers.zeros, (self.action_dim,))
         pi = distrax.MultivariateNormalDiag(actor_mean, jnp.exp(actor_logtstd))
 
+        #critic has similar construction, outputs a singular value ()
         critic = nn.Dense(
             256, kernel_init=orthogonal(np.sqrt(2)), bias_init=constant(0.0)
         )(x)
@@ -50,9 +62,10 @@ class ActorCritic(nn.Module):
             critic
         )
 
+        #return action distribution and critic output
         return pi, jnp.squeeze(critic, axis=-1)
 
-
+#defines a memory tuple to store components of agent's experience
 class Memory(NamedTuple):
     done: jnp.ndarray
     action: jnp.ndarray
@@ -62,18 +75,25 @@ class Memory(NamedTuple):
     obs: jnp.ndarray
     info: jnp.ndarray
 
+#save model params to file
 def save_model(params, filename):
     os.makedirs(os.path.dirname(filename), exist_ok=True)
     with open(filename, 'wb') as f:
         pickle.dump(params, f)
 
+# sets up training process 
 def make_train(config):
+    #calculates number of updates to perform (timesteps / nu)
     config["NUM_UPDATES"] = (
         config["TOTAL_TIMESTEPS"] // config["NUM_STEPS"] // config["NUM_ENVS"]
     )
+
+    #calculates size of each minibatch 
     config["MINIBATCH_SIZE"] = (
         config["NUM_ENVS"] * config["NUM_STEPS"] // config["NUM_MINIBATCHES"]
     )
+
+    #creates instance of humanoid env
     env = HumanoidEnv()
     # env = LogWrapper(env)
     # env = ClipAction(env)
@@ -83,6 +103,7 @@ def make_train(config):
     #     env = NormalizeVecObservation(env)
     #     env = NormalizeVecReward(env, config["GAMMA"])
 
+    #learning rate decreases linearly over time
     def linear_schedule(count):
         frac = (
             1.0
@@ -91,13 +112,17 @@ def make_train(config):
         )
         return config["LR"] * frac
 
+    #main training function. rng -> random number generator from jax
     def train(rng):
         # INIT NETWORK
         network = ActorCritic(env.action_size, activation=config["ACTIVATION"])
         rng, _rng = jax.random.split(rng)
+        #0 tensor in the shape of the observation space
         init_x = jnp.zeros(env.observation_size)
+        #initialize network params
         network_params = network.init(_rng, init_x)
 
+        #sets up optimizer. if anneal is true, use linear schedule, else use const LR
         if config["ANNEAL_LR"]:
             tx = optax.chain(
                 optax.clip_by_global_norm(config["MAX_GRAD_NORM"]),
@@ -109,6 +134,7 @@ def make_train(config):
                 optax.adam(config["LR"], eps=1e-5),
             )
 
+        # creates a train state object that keeps track of the network params, function to apply to inputs, and optimizer
         train_state = TrainState.create(
             apply_fn=network.apply,
             params=network_params,
@@ -129,6 +155,7 @@ def make_train(config):
         rng, reset_rng = jax.random.split(rng)
         env_state = reset_fn(jnp.array(reset_rng))
 
+        # extracts initial observation
         obs = env_state.obs
 
         # TRAIN LOOP
@@ -139,7 +166,7 @@ def make_train(config):
                 """Runs NUM_STEPS across all environments and collects memory"""
                 train_state, env_state, last_obs, rng = runner_state
 
-                # SELECT ACTION
+                # SELECT ACTION (sample action from action distribution)
                 rng, _rng = jax.random.split(rng)
                 pi, value = network.apply(train_state.params, last_obs)
                 action = pi.sample(seed=_rng)
@@ -150,11 +177,13 @@ def make_train(config):
                 rng, _rng = jax.random.split(rng)
                 rng_step = jax.random.split(_rng, config["NUM_ENVS"])
 
+                #clips and applies action to get new state
                 env_state = step_fn(env_state, action, rng_step)
 
                 # Normalizing observations improves training
                 obs = env_state.obs
 
+                #extracts reward and other states to put into memory
                 reward = env_state.reward
                 done = env_state.done
                 info = env_state.metrics
@@ -166,6 +195,7 @@ def make_train(config):
                 # jax.debug.print("info {}", info)
                 return runner_state, memory
 
+            #apply _env_step "NUM_STEPS" times
             runner_state, mem_batch = jax.lax.scan(
                 _env_step, runner_state, None, config["NUM_STEPS"]
             )
@@ -175,6 +205,7 @@ def make_train(config):
             _, last_val = network.apply(train_state.params, last_obs)
 
             def _calculate_gae(mem_batch, last_val):
+                #computes advantages for a single timestep
                 def _get_advantages(gae_and_next_value, memory):
                     gae, next_value = gae_and_next_value
                     done, value, reward = (
@@ -182,13 +213,16 @@ def make_train(config):
                         memory.value,
                         memory.reward,
                     )
+                    #difference between estimated return and current value estimate
                     delta = reward + config["GAMMA"] * next_value * (1 - done) - value
+                    #weighted sum of current temporal diff error with previous gae
                     gae = (
                         delta
                         + config["GAMMA"] * config["GAE_LAMBDA"] * (1 - done) * gae
                     )
                     return (gae, value), gae
 
+                #calculates advantage over batch of memories in reverse order 
                 _, advantages = jax.lax.scan(
                     _get_advantages,
                     (jnp.zeros_like(last_val), last_val),
@@ -196,12 +230,13 @@ def make_train(config):
                     reverse=True,
                     unroll=16,
                 )
+                #returns advantage est for each timestep and estimated returns for each timestep
                 return advantages, advantages + mem_batch.value
 
             advantages, targets = _calculate_gae(mem_batch, last_val)
 
             def _update_epoch(update_state, unused):
-                """Scanned function for updating networkfrom all state frames collected above."""
+                """Scanned function for updating network from all state frames collected above."""
 
                 def _update_minibatch(train_state, batch_info):
                     """Scanned function for updating from a single minibatch (single network update)."""
