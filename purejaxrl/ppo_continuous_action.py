@@ -70,9 +70,10 @@ class Transition(NamedTuple):
 
 def save_model(params, filename):
     os.makedirs(os.path.dirname(filename), exist_ok=True)
-    with open(filename, 'wb') as f:
+    with open(filename, "wb") as f:
         pickle.dump(params, f)
-        
+
+
 def make_train(config):
     config["NUM_UPDATES"] = (
         config["TOTAL_TIMESTEPS"] // config["NUM_STEPS"] // config["NUM_ENVS"]
@@ -318,4 +319,6 @@ if __name__ == "__main__":
     train_jit = jax.jit(make_train(config))
     out = train_jit(rng)
 
-    save_model(out["runner_state"][0].params, f"models/purejax_ppo_continuous_model.pkl")
+    save_model(
+        out["runner_state"][0].params, f"models/purejax_ppo_continuous_model.pkl"
+    )

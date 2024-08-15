@@ -76,7 +76,6 @@ def main() -> None:
 
     episodes = 0
 
-    print(max_frames)
     for step in range(max_frames):
         obs = state.obs
         rollout.append(state.pipeline_state)

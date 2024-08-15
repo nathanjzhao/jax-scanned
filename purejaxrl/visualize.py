@@ -34,9 +34,10 @@ config = {
 
 
 def load_model(filename) -> ActorCritic:
-    with open(filename, 'rb') as f:
+    with open(filename, "rb") as f:
         return pickle.load(f)
-    
+
+
 env, env_params = BraxGymnaxWrapper(config["ENV_NAME"]), None
 env = LogWrapper(env)
 env = ClipAction(env)
@@ -58,17 +59,17 @@ while True:
     rng, rng_step = jax.random.split(rng)
     pi, _ = network.apply(loaded_params, obs)
     action = pi.sample(seed=rng_act)
-    next_obs, next_env_state, reward, done, info = env.step(
-        rng_step, env_state, action
-    )
+    next_obs, next_env_state, reward, done, info = env.step(rng_step, env_state, action)
     reward_seq.append(reward)
     if done:
         break
     else:
-      obs = next_obs
-      env_state = next_env_state
+        obs = next_obs
+        env_state = next_env_state
 
 cum_rewards = jnp.cumsum(jnp.array(reward_seq))
+
+# this doesn't work because gymnax is a scam
 vis = Visualizer(env, env_params, state_seq, cum_rewards)
 
 vis.animate(f"videos/anim.gif")

@@ -1,5 +1,6 @@
 """For converting trained model into tfjs model"""
 
+import argparse
 import pickle
 import jax
 import flax
@@ -50,7 +51,16 @@ def load_model(filename) -> ActorCritic:
         return pickle.load(f)
 
 
-flax_params = load_model("/home/nathanzh/purejaxrl/models/more_timesteps_model.pkl")
+# Argument parsing
+parser = argparse.ArgumentParser(
+    description="Convert Flax model to TensorFlow.js format"
+)
+parser.add_argument(
+    "--env_name", type=str, required=True, help="Name of the environment"
+)
+args = parser.parse_args()
+
+flax_params = load_model(f"models/{args.env_name}_model.pkl")
 
 # Convert Flax parameters to a flat dictionary
 flax_params_flat = flax.traverse_util.flatten_dict(flax_params["params"])
@@ -91,5 +101,5 @@ for layer in tf_model.layers[1:]:  # Skip the Input layer
 #     tf_model.log_std = tf.Variable(initial_value=log_std, trainable=True, name="log_std")
 
 # Step 5: Save the model in TensorFlow.js format
-tfjs.converters.save_keras_model(tf_model, "tfjs_model")
+tfjs.converters.save_keras_model(tf_model, f"tfjs_models/{args.env_name}")
 print("Model saved in TensorFlow.js format")

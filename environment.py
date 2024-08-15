@@ -7,6 +7,7 @@ import os
 import shutil
 import subprocess
 import tempfile
+import cv2
 from flax import struct
 from pathlib import Path
 from typing import Any, Optional, Tuple
@@ -23,17 +24,28 @@ from brax.mjx.base import State as MjxState
 logger = logging.getLogger(__name__)
 
 REWARD_CONFIG = {
-    "termination_height": 0,
-    "height_limits": {"min_z": 0, "max_z": 2.0},
+    "termination_height": -1.0,
+    "height_limits": {"min_z": -1.0, "max_z": 2.0},
     "is_healthy_reward": 5,
     "original_pos_reward": {
-        "exp_coefficient": -2,
+        "exp_coefficient": 2,
         "subtraction_factor": 0.2,
         "max_diff_norm": 0.5,
     },
     "ctrl_cost_coefficient": 0.1,
     "weights": {"ctrl_cost": 0.1, "original_pos_reward": 1, "is_healthy": 5},
 }
+
+
+REPO_DIR = "dora"  # humanoid_original or stompy
+XML_NAME = "dora2_sensorless.xml"
+
+# keyframe for default positions (or None for self.sys.qpos0)
+KEYFRAME_NAME = "default" if REPO_DIR.startswith("humanoid") else None
+
+# my testing :)
+INCLUDE_C_VALS = True
+PHYSICS_FRAMES = 1
 
 
 def download_model_files(repo_url: str, repo_dir: str, local_path: str) -> None:
@@ -96,24 +108,23 @@ class HumanoidEnv(PipelineEnv):
     _action_size: int
     reset_noise_scale: float = 0.0
 
-    def __init__(self, n_frames: int = 1, backend: str = "mjx") -> None:
+    def __init__(self, n_frames: int = PHYSICS_FRAMES, backend: str = "mjx") -> None:
         """Initializes system with initial joint positions, action size, the model, and update rate."""
         # GitHub repository URL
         repo_url = "https://github.com/nathanjzhao/mujoco-models.git"
-
-        # Directory within the repository containing the model files
-        repo_dir = "humanoid-original"
 
         # Local path where the files should be saved
         environments_path = os.path.join(os.path.dirname(__file__), "environments")
 
         # Download or update the model files
-        download_model_files(repo_url, repo_dir, environments_path)
+        download_model_files(repo_url, REPO_DIR, environments_path)
 
         # Now use the local path to load the model
-        xml_path = os.path.join(environments_path, repo_dir, "humanoid.xml")
+        xml_path = os.path.join(environments_path, REPO_DIR, XML_NAME)
         mj_model: mujoco.MjModel = mujoco.MjModel.from_xml_path(xml_path)
-        # self.initial_qpos = jnp.array(mj_model.keyframe("default").qpos)
+
+        if KEYFRAME_NAME:
+            self.initial_qpos = jnp.array(mj_model.keyframe(KEYFRAME_NAME).qpos)
 
         mj_model.opt.solver = mujoco.mjtSolver.mjSOL_CG
         mj_model.opt.iterations = 6
@@ -164,10 +175,16 @@ class HumanoidEnv(PipelineEnv):
         # reset env if done
         rng, rng1, rng2 = jax.random.split(rng, 3)
         low, hi = -self.reset_noise_scale, self.reset_noise_scale
-        qpos = self.sys.qpos0 + jax.random.uniform(
-            rng1, (self.sys.nq,), minval=low, maxval=hi
-        )
-        # qpos = self.initial_qpos + jax.random.uniform(rng1, (self.sys.nq,), minval=low, maxval=hi)
+
+        if KEYFRAME_NAME:
+            qpos = self.initial_qpos + jax.random.uniform(
+                rng1, (self.sys.nq,), minval=low, maxval=hi
+            )
+        else:
+            qpos = self.sys.qpos0 + jax.random.uniform(
+                rng1, (self.sys.nq,), minval=low, maxval=hi
+            )
+
         qvel = jax.random.uniform(rng2, (self.sys.nv,), minval=low, maxval=hi)
         state_reset = self.pipeline_init(qpos, qvel)
         obs_reset = self.get_obs(state, jnp.zeros(self._action_size))
@@ -179,8 +196,6 @@ class HumanoidEnv(PipelineEnv):
         obs = jax.lax.select(done, obs_reset, obs_state)
 
         ########### METRIC TRACKING ###########
-        # jax.debug.breakpoint()
-        # breakpoint()
 
         # Get previous metrics
         metrics = env_state.metrics
@@ -224,7 +239,11 @@ class HumanoidEnv(PipelineEnv):
         is_healthy = jnp.where(state.q[2] < min_z, 0.0, 1.0)
         is_healthy = jnp.where(state.q[2] > max_z, 0.0, is_healthy)
 
-        diff = self.sys.qpos0 - state.qpos
+        if KEYFRAME_NAME:
+            diff = self.initial_qpos - state.qpos
+        else:
+            diff = self.sys.qpos0 - state.qpos
+
         original_pos_reward = jnp.exp(
             -exp_coef * jnp.linalg.norm(diff)
         ) - subtraction_factor * jnp.clip(jnp.linalg.norm(diff), 0, max_diff_norm)
@@ -240,7 +259,6 @@ class HumanoidEnv(PipelineEnv):
             + REWARD_CONFIG["weights"]["original_pos_reward"] * original_pos_reward
             + REWARD_CONFIG["weights"]["is_healthy"] * is_healthy
         )
-        # total_reward = 0.1 * ctrl_cost + 5 * is_healthy + 1.25 * velocity
 
         return total_reward
 
@@ -257,14 +275,23 @@ class HumanoidEnv(PipelineEnv):
 
     @partial(jax.jit, static_argnums=(0,))
     def get_obs(self, data: MjxState, action: jnp.ndarray) -> jnp.ndarray:
-        obs_components = [
-            data.qpos[2:],
-            data.qvel,
-            data.cinert[1:].ravel(),
-            data.cvel[1:].ravel(),
-            data.qfrc_actuator,
-        ]
-        
+        if INCLUDE_C_VALS:
+            # slicing cinert and cvel because always zeroes
+            # no longer slicing qpos
+            obs_components = [
+                data.qpos,
+                data.qvel,
+                data.cinert[1:].ravel(),
+                data.cvel[1:].ravel(),
+                data.qfrc_actuator,
+            ]
+        else:
+            obs_components = [
+                data.qpos,
+                data.qvel,
+                data.qfrc_actuator,
+            ]
+
         return jnp.concatenate(obs_components)
 
 
@@ -554,12 +581,12 @@ def run_environment_adhoc() -> None:
         "--num_episodes", type=int, default=20, help="number of episodes to run"
     )
     parser.add_argument(
-        "--max_steps", type=int, default=200, help="maximum steps per episode"
+        "--max_steps", type=int, default=1024, help="maximum steps per episode"
     )
     parser.add_argument(
-        "--video_path",
+        "--env_name",
         type=str,
-        default="random_video.mp4",
+        default="random",
         help="path to save video",
     )
     parser.add_argument(
@@ -571,7 +598,7 @@ def run_environment_adhoc() -> None:
     parser.add_argument(
         "--video_length",
         type=float,
-        default=10.0,
+        default=5.0,
         help="desired length of video in seconds",
     )
     parser.add_argument(
@@ -593,6 +620,9 @@ def run_environment_adhoc() -> None:
     max_frames = int(args.video_length * fps)
     rollout: list[Any] = []
 
+    video_path = args.env_name + ".mp4"
+    metrics = {"qpos_2": []}
+
     for episode in range(args.num_episodes):
         rng, _ = jax.random.split(rng)
         state = reset_fn(rng)
@@ -604,6 +634,9 @@ def run_environment_adhoc() -> None:
         ):
             if len(rollout) < args.video_length * fps:
                 rollout.append(state.pipeline_state)
+
+            #### STORED METRICS ####
+            metrics["qpos_2"].append(state.pipeline_state.qpos[2])
 
             rng, action_rng = jax.random.split(rng)
             action = jax.random.uniform(
@@ -617,25 +650,75 @@ def run_environment_adhoc() -> None:
             if state.done:
                 break
 
-        logging.info(f"Episode {episode + 1} total reward: {total_reward}")
+        print(f"Episode {episode + 1} total reward: {total_reward}")
 
         if len(rollout) >= max_frames:
             break
 
-    # Trim rollout to desired length
-    rollout = rollout[:max_frames]
-
+    print(f"Rendering video with {len(rollout)} frames at {fps} fps")
     images = jnp.array(
         env.render(
             rollout[:: args.render_every],
-            camera="side",
             width=args.width,
             height=args.height,
         )
     )
-    logging.info(f"Rendering video with {len(images)} frames at {fps} fps")
-    media.write_video(args.video_path, images, fps=fps)
-    logging.info(f"Video saved to {args.video_path}")
+
+    print("Video rendered")
+    media.write_video(video_path, images, fps=fps)
+    print(f"Video saved to {video_path}")
+
+    ###### ADDS DEBUG TEXT ON TOP OF VIDEO ######
+
+    # video_path = video_path
+    # cap = cv2.VideoCapture(video_path)
+
+    # if not cap.isOpened():
+    #     print(f"Error: Could not open video {video_path}")
+
+    # # Get video properties
+    # frame_width = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
+    # frame_height = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
+    # fps = cap.get(cv2.CAP_PROP_FPS)
+
+    # # Define the codec and create VideoWriter object
+    # debug_video_path = args.env_name + "_debug.mp4"
+    # fourcc = cv2.VideoWriter_fourcc(*'mp4v')
+    # out = cv2.VideoWriter(debug_video_path, fourcc, fps, (frame_width, frame_height))
+
+    # # Loop through each frame
+    # frame_index = 0
+
+    # if not out.isOpened():
+    #     print("Error: Could not open VideoWriter")
+
+    # while cap.isOpened():
+    #     ret, frame = cap.read()
+    #     if not ret:
+    #         break
+
+    #     # Write each metric on the frame
+    #     font = cv2.FONT_HERSHEY_SIMPLEX
+    #     font_scale = 1
+    #     color = (255, 0, 0)  # Blue color in BGR
+    #     thickness = 2
+    #     y_offset = 50  # Initial y position for the text
+
+    #     for key, values in metrics.items():
+    #         if frame_index < len(values):
+    #             text = f'{key}: {values[frame_index]}'
+    #             org = (50, y_offset)  # Position for the text
+    #             frame = cv2.putText(frame, text, org, font, font_scale, color, thickness, cv2.LINE_AA)
+    #             y_offset += 30  # Move to the next line for the next metric
+
+    #     # Write the frame into the output video
+    #     out.write(frame)
+    #     frame_index += 1
+
+    # # Release everything if job is finished
+    # cap.release()
+    # out.release()
+    # cv2.destroyAllWindows()
 
 
 if __name__ == "__main__":
