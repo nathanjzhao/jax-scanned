@@ -12,24 +12,46 @@ from environment import HumanoidEnv
 from train import ActorCritic
 import os
 
-os.environ['MUJOCO_GL'] = 'egl'
-os.environ['DISPLAY'] = ':0'
+os.environ["MUJOCO_GL"] = "egl"
+os.environ["DISPLAY"] = ":0"
+
 
 def load_model(filename) -> ActorCritic:
-    with open(filename, 'rb') as f:
+    with open(filename, "rb") as f:
         return pickle.load(f)
-    
+
+
 def main() -> None:
     """Runs inference with pretrained models."""
     parser = argparse.ArgumentParser()
-    parser.add_argument('--env_name', type=str, default='Humanoid-v2', help='name of the environment')
-    parser.add_argument("--num_episodes", type=int, default=10, help="number of episodes to run")
-    parser.add_argument("--max_steps", type=int, default=1000, help="maximum steps per episode")
+    parser.add_argument(
+        "--env_name", type=str, default="Humanoid-v2", help="name of the environment"
+    )
+    parser.add_argument(
+        "--num_episodes", type=int, default=10, help="number of episodes to run"
+    )
+    parser.add_argument(
+        "--max_steps", type=int, default=1000, help="maximum steps per episode"
+    )
 
-    parser.add_argument("--render_every", type=int, default=2, help="how many frames to skip between renders")
-    parser.add_argument("--video_length", type=float, default=20.0, help="desired length of video in seconds")
-    parser.add_argument("--width", type=int, default=640, help="width of the video frame")
-    parser.add_argument("--height", type=int, default=480, help="height of the video frame")
+    parser.add_argument(
+        "--render_every",
+        type=int,
+        default=2,
+        help="how many frames to skip between renders",
+    )
+    parser.add_argument(
+        "--video_length",
+        type=float,
+        default=20.0,
+        help="desired length of video in seconds",
+    )
+    parser.add_argument(
+        "--width", type=int, default=640, help="width of the video frame"
+    )
+    parser.add_argument(
+        "--height", type=int, default=480, help="height of the video frame"
+    )
     args = parser.parse_args()
 
     env = HumanoidEnv()
@@ -47,14 +69,13 @@ def main() -> None:
     fps = int(1 / env.dt)
     max_frames = int(args.video_length * fps)
     rollout: list[Any] = []
-    episode_reward = 0 
+    episode_reward = 0
     total_reward = 0
     rng, reset_rng = jax.random.split(rng)
     state = reset_fn(reset_rng)
 
     episodes = 0
 
-    print(max_frames)
     for step in range(max_frames):
         obs = state.obs
         rollout.append(state.pipeline_state)
@@ -80,7 +101,7 @@ def main() -> None:
 
     # def scan_env(carry, t):
     #     rollout, total_reward, state, rng = carry
-        
+
     #     obs = state.obs
 
     #     rng, _rng = jax.random.split(rng)
@@ -95,7 +116,6 @@ def main() -> None:
 
     #     return (rollout, total_reward, state, rng), None
 
-
     # rollout = jnp.empty((max_frames, env.observation_size))
     # (rollout, total_reward, _, _ ), _ = jax.lax.scan(
     #     scan_env, (rollout, 0, state, rng), jnp.arange(max_frames)
@@ -104,7 +124,14 @@ def main() -> None:
     total_reward /= max_frames
     print(f"Average reward: {total_reward}")
 
-    images = jnp.array(env.render(rollout[:: args.render_every], camera="side", width=args.width, height=args.height))
+    images = jnp.array(
+        env.render(
+            rollout[:: args.render_every],
+            camera="side",
+            width=args.width,
+            height=args.height,
+        )
+    )
     print(f"Rendering video with {len(images)} frames at {fps} fps")
     media.write_video(video_path, images, fps=fps)
     print(f"Video saved to {video_path}")

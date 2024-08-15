@@ -11,7 +11,13 @@ from typing import Sequence, NamedTuple
 from flax.training.train_state import TrainState
 import distrax
 from brax.envs import State
-from environment import ClipAction, HumanoidEnv, NormalizeVecObservation, NormalizeVecReward, VecEnv
+from environment import (
+    ClipAction,
+    HumanoidEnv,
+    NormalizeVecObservation,
+    NormalizeVecReward,
+    VecEnv,
+)
 
 
 class ActorCritic(nn.Module):
@@ -62,10 +68,12 @@ class Memory(NamedTuple):
     obs: jnp.ndarray
     info: jnp.ndarray
 
+
 def save_model(params, filename):
     os.makedirs(os.path.dirname(filename), exist_ok=True)
-    with open(filename, 'wb') as f:
+    with open(filename, "wb") as f:
         pickle.dump(params, f)
+
 
 def make_train(config):
     config["NUM_UPDATES"] = (
@@ -133,7 +141,8 @@ def make_train(config):
 
         # TRAIN LOOP
         def _update_step(runner_state, unused):
-            """Update steps of the model --- environment memory colelction then network update"""    
+            """Update steps of the model --- environment memory colelction then network update"""
+
             # COLLECT MEMORY
             def _env_step(runner_state, unused):
                 """Runs NUM_STEPS across all environments and collects memory"""
@@ -162,7 +171,7 @@ def make_train(config):
                 # STORE MEMORY
                 memory = Memory(done, action, value, reward, log_prob, last_obs, info)
                 runner_state = (train_state, env_state, obs, rng)
-                
+
                 # jax.debug.print("info {}", info)
                 return runner_state, memory
 
@@ -265,7 +274,6 @@ def make_train(config):
                 permutation = jax.random.permutation(_rng, batch_size)
                 batch = (mem_batch, advantages, targets)
 
-
                 batch = jax.tree_util.tree_map(
                     lambda x: x.reshape((batch_size,) + x.shape[2:]), batch
                 )
@@ -280,7 +288,6 @@ def make_train(config):
                     ),
                     shuffled_batch,
                 )
-
 
                 train_state, total_loss = jax.lax.scan(
                     _update_minibatch, train_state, minibatches
@@ -298,6 +305,7 @@ def make_train(config):
 
             # jax.debug.breakpoint()
             if config.get("DEBUG"):
+
                 def callback(info):
                     return_values = info["returned_episode_returns"][
                         info["returned_episode"]
@@ -328,10 +336,14 @@ def make_train(config):
 
 if __name__ == "__main__":
 
-    parser = argparse.ArgumentParser(description="Train a model with specified environment name.")
-    parser.add_argument('--env_name', type=str, required=True, help='Name of the environment')
+    parser = argparse.ArgumentParser(
+        description="Train a model with specified environment name."
+    )
+    parser.add_argument(
+        "--env_name", type=str, required=True, help="Name of the environment"
+    )
     args = parser.parse_args()
-    
+
     config = {
         "LR": 3e-4,
         "NUM_ENVS": 2048,
