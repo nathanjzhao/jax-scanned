@@ -12,8 +12,6 @@ from environment import HumanoidEnv
 from train import ActorCritic
 import os
 
-import math
-
 os.environ['MUJOCO_GL'] = 'egl'
 os.environ['DISPLAY'] = ':0'
 
@@ -71,13 +69,7 @@ def main() -> None:
 
         total_reward += state.reward
         episode_reward += state.reward
-        
-        if (math.isnan(state.reward) or jnp.isnan(jnp.sum(obs ))):
-            print(f"NAN FOUND AT ITERATION {step}")
-            print(f"obs: {obs}")
-            print(f"action: {action}")
-            # print(f"state: {state}")
-            break
+
         if state.done:
             episodes += 1
             print("Episode", episodes, "reward:", episode_reward)
