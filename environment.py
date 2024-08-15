@@ -151,12 +151,12 @@ class HumanoidEnv(PipelineEnv):
             "returned_episode_lengths": 0,
             "timestep": 0,
             "returned_episode": False,
-            "return_avg": 0,
-            "obs_avg": 0,
+            "return_avg": EPSILON,
+            "obs_avg": EPSILON,
             "return_var": 1,
             "obs_var": 1,
-            "return_norm": 0,
-            "obs_norm": 0,
+            "return_norm": EPSILON,
+            "obs_norm": EPSILON,
             "return_count": EPSILON,
             "obs_count": EPSILON
         }
@@ -198,31 +198,31 @@ class HumanoidEnv(PipelineEnv):
         # Get previous metrics
         metrics = env_state.metrics
 
-        state_obs_avg = metrics["obs_avg"] * (1 - done)
-        state_obs_var = metrics["obs_var"] * (1 - done) + done * 1
-        state_obs_count = metrics["obs_count"]*(1 - done) + done * EPSILON
-        obs_delta = jnp.mean(obs) - state_obs_avg
-        tot_obs_count = state_obs_count + 1
-        new_obs_mean = state_obs_avg + obs_delta*tot_obs_count
+        # state_obs_avg = metrics["obs_avg"] * (1 - done) + done * EPSILON
+        # state_obs_var = metrics["obs_var"] * (1 - done) + done * 1
+        # state_obs_count = metrics["obs_count"]*(1 - done) + done * EPSILON
+        # obs_delta = jnp.mean(obs) - state_obs_avg
+        # tot_obs_count = state_obs_count + 1
+        # new_obs_mean = state_obs_avg + obs_delta*tot_obs_count
 
-        obs_m_a = (state_obs_var)*(state_obs_count)
-        #m_b = 0 since var of 1 item is 0
-        obs_M2 = obs_m_a + jnp.square(obs_delta) * state_obs_count / (tot_obs_count + EPSILON)
-        new_obs_var = obs_M2 / tot_obs_count
-        new_obs_count = tot_obs_count
+        # obs_m_a = (state_obs_var)*(state_obs_count)
+        # #m_b = 0 since var of 1 item is 0
+        # obs_M2 = obs_m_a + jnp.square(obs_delta) * state_obs_count / (tot_obs_count + EPSILON)
+        # new_obs_var = obs_M2 / (tot_obs_count + EPSILON)
+        # new_obs_count = tot_obs_count
 
-        metrics["obs_avg"] = new_obs_mean * (1 - done)
-        metrics["obs_var"] = new_obs_var * (1 - done) + done * 1
-        metrics["obs_count"] = new_obs_count * (1 - done) + done * 1
+        # metrics["obs_avg"] = new_obs_mean * (1 - done) + done * EPSILON
+        # metrics["obs_var"] = new_obs_var * (1 - done) + done * 1
+        # metrics["obs_count"] = new_obs_count * (1 - done) + done * EPSILON
 
-        metrics["obs_norm"] = (jnp.mean(obs) - metrics["obs_avg"]) * (1 - done) / (jnp.sqrt(metrics["obs_var"] + EPSILON))
+        # metrics["obs_norm"] = (jnp.mean(obs) - metrics["obs_avg"]) * (1 - done) / (jnp.sqrt(metrics["obs_var"] + EPSILON))
 
         state_return_val = metrics["episode_returns"] * (1 - done)
         state_return_avg = metrics["return_avg"] * (1 - done)
         state_return_var = metrics["return_var"] * (1 - done)  + done * 1
         state_return_count = metrics["return_count"] * (1 - done) + done * EPSILON
         return_val = state_return_val * self.gamma * (1 - done) + reward
-        return_delta = return_val - state_return_avg
+        return_delta = reward - state_return_avg
         tot_return_count = state_return_count + 1
         new_return_mean = state_return_avg + return_delta / (tot_return_count + EPSILON)
         return_m_a = state_return_var * state_return_count
@@ -234,7 +234,7 @@ class HumanoidEnv(PipelineEnv):
         metrics["return_var"] = new_return_var * (1 - done) + 1 * done
         metrics["return_count"] = new_return_count * (1 - done)
 
-        metrics["return_norm"] = (reward * (1 - done)) / (jnp.sqrt(metrics["return_var"] + 1e-8))
+        metrics["return_norm"] = (reward * (1 - done)) / (jnp.sqrt(metrics["return_var"] + EPSILON))
 
 
 
@@ -256,8 +256,15 @@ class HumanoidEnv(PipelineEnv):
         metrics["timestep"] = metrics["timestep"] + 1
         metrics["returned_episode"] = done
 
+        # if (jnp.isnan(jnp.sum(obs)) or jnp.isnan(metrics["return_norm"])):
+        #     jax.debug.print("obs: {obs}", obs)
+        #     jax.debug.print("return norm: {return_norm}", metrics["return_norm"])
+        #     jax.debug.print("timestep: {timestep}", metrics["timestep"])
+        #     jax.debug.print("done: {done}", done)
+
+
         return env_state.replace(
-            pipeline_state=state, obs=jnp.ones_like(obs)*metrics["obs_norm"], reward=metrics["return_norm"], done=done, metrics=metrics
+            pipeline_state=state, obs=obs, reward=metrics["return_norm"], done=done, metrics=metrics
         )
 
     @partial(jax.jit, static_argnums=(0,))

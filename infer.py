@@ -24,7 +24,7 @@ def load_model(filename) -> ActorCritic:
 def main() -> None:
     """Runs inference with pretrained models."""
     parser = argparse.ArgumentParser()
-    parser.add_argument('--env_name', type=str, default='Humanoid-v2', help='name of the environment')
+    parser.add_argument('--env_name', type=str, default='Humanoid_v2', help='name of the environment')
     parser.add_argument("--num_episodes", type=int, default=10, help="number of episodes to run")
     parser.add_argument("--max_steps", type=int, default=1000, help="maximum steps per episode")
 

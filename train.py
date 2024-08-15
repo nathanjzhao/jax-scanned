@@ -372,7 +372,7 @@ if __name__ == "__main__":
         "NUM_ENVS": 2048,
         "NUM_STEPS": 10,
         # "TOTAL_TIMESTEPS": 2048 * 2000,
-        "TOTAL_TIMESTEPS": 5e8,
+        "TOTAL_TIMESTEPS": 5e7,
         "UPDATE_EPOCHS": 4,
         "NUM_MINIBATCHES": 32,
         "GAMMA": 0.99,
