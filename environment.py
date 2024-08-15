@@ -203,7 +203,9 @@ class HumanoidEnv(PipelineEnv):
         is_healthy = jnp.where(state.q[2] < min_z, 0.0, 1.0)
         is_healthy = jnp.where(state.q[2] > max_z, 0.0, is_healthy)
 
-        diff_cost = -jnp.sum(jnp.square(self.sys.qpos0 - state.qpos))
+        diff = self.sys.qpos0 - state.qpos
+        original_pos_reward = jnp.exp(-2 * jnp.linalg.norm(diff)) - 0.2 * jnp.clip(jnp.linalg.norm(diff), 0, 0.5)
+
         ctrl_cost = -jnp.sum(jnp.square(action))
 
         # xpos = state.subtree_com[1][0]
@@ -221,7 +223,7 @@ class HumanoidEnv(PipelineEnv):
 
         # jax.debug.print("diff {}", diff_cost)
 
-        total_reward = 0.1 * ctrl_cost + 0.1 * diff_cost + 5 * is_healthy
+        total_reward = 0.1 * ctrl_cost + 1 * original_pos_reward + 5 * is_healthy
         # total_reward = 0.1 * ctrl_cost + 5 * is_healthy + 1.25 * velocity
 
         return total_reward
@@ -251,6 +253,23 @@ class HumanoidEnv(PipelineEnv):
             data.cvel[1:].ravel(),
             data.qfrc_actuator,
         ]
+
+        # qpos_component = data.qpos
+        # qvel_component = data.qvel
+        # cinert_component = data.cinert
+        # cvel_component = data.cvel
+        # qfrc_actuator_component = data.qfrc_actuator
+
+        # # Print lengths of each component
+        # print("Length of qpos_component:", qpos_component.shape)
+        # print("Length of qvel_component:", qvel_component.shape)
+        # print("Length of cinert_component:", cinert_component.shape)
+        # print("Length of cvel_component:", cvel_component.shape)
+        # print("Length of qfrc_actuator_component:", qfrc_actuator_component.shape)
+
+        # breakpoint()
+
+
 
         return jnp.concatenate(obs_components)
 
