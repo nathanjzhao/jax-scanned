@@ -20,8 +20,20 @@ from brax.io import mjcf
 from brax.mjx.base import State as MjxState
 
 
-
 logger = logging.getLogger(__name__)
+
+REWARD_CONFIG = {
+    "termination_height": 0,
+    "height_limits": {"min_z": 0, "max_z": 2.0},
+    "is_healthy_reward": 5,
+    "original_pos_reward": {
+        "exp_coefficient": -2,
+        "subtraction_factor": 0.2,
+        "max_diff_norm": 0.5,
+    },
+    "ctrl_cost_coefficient": 0.1,
+    "weights": {"ctrl_cost": 0.1, "original_pos_reward": 1, "is_healthy": 5},
+}
 
 
 def download_model_files(repo_url: str, repo_dir: str, local_path: str) -> None:
@@ -198,13 +210,24 @@ class HumanoidEnv(PipelineEnv):
         self, state: MjxState, next_state: MjxState, action: jnp.ndarray
     ) -> jnp.ndarray:
         """Compute the reward for standing and height."""
-        min_z, max_z = 0, 2.0
-        # min_z, max_z = -0.35, 2.0
+        min_z, max_z = (
+            REWARD_CONFIG["height_limits"]["min_z"],
+            REWARD_CONFIG["height_limits"]["max_z"],
+        )
+
+        exp_coef, subtraction_factor, max_diff_norm = (
+            REWARD_CONFIG["original_pos_reward"]["exp_coefficient"],
+            REWARD_CONFIG["original_pos_reward"]["subtraction_factor"],
+            REWARD_CONFIG["original_pos_reward"]["max_diff_norm"],
+        )
+
         is_healthy = jnp.where(state.q[2] < min_z, 0.0, 1.0)
         is_healthy = jnp.where(state.q[2] > max_z, 0.0, is_healthy)
 
         diff = self.sys.qpos0 - state.qpos
-        original_pos_reward = jnp.exp(-2 * jnp.linalg.norm(diff)) - 0.2 * jnp.clip(jnp.linalg.norm(diff), 0, 0.5)
+        original_pos_reward = jnp.exp(
+            -exp_coef * jnp.linalg.norm(diff)
+        ) - subtraction_factor * jnp.clip(jnp.linalg.norm(diff), 0, max_diff_norm)
 
         ctrl_cost = -jnp.sum(jnp.square(action))
 
@@ -212,18 +235,11 @@ class HumanoidEnv(PipelineEnv):
         # next_xpos = next_state.subtree_com[1][0]
         # velocity = (next_xpos - xpos) / self.dt
 
-        # jax.debug.print(
-        #     "velocity {}, xpos {}, next_xpos {}",
-        #     velocity,
-        #     xpos,
-        #     next_xpos,
-        #     ordered=True,
-        # )
-        # jax.debug.print("ctrl_cost {}, is_healthy {}, height {}", ctrl_cost, is_healthy, state.q[2], ordered=True)
-
-        # jax.debug.print("diff {}", diff_cost)
-
-        total_reward = 0.1 * ctrl_cost + 1 * original_pos_reward + 5 * is_healthy
+        total_reward = (
+            REWARD_CONFIG["weights"]["ctrl_cost"] * ctrl_cost
+            + REWARD_CONFIG["weights"]["original_pos_reward"] * original_pos_reward
+            + REWARD_CONFIG["weights"]["is_healthy"] * is_healthy
+        )
         # total_reward = 0.1 * ctrl_cost + 5 * is_healthy + 1.25 * velocity
 
         return total_reward
@@ -235,13 +251,8 @@ class HumanoidEnv(PipelineEnv):
         com_height = state.q[2]
 
         # Set a termination threshold
-        termination_height = 0
-        # termination_height = -0.35
+        termination_height = REWARD_CONFIG["termination_height"]
 
-        # Episode is done if the robot falls below the termination height
-        # done = jnp.where(com_height < termination_height, 1.0, 0.0)
-
-        # return com_height < termination_height
         return com_height < termination_height
 
     @partial(jax.jit, static_argnums=(0,))
@@ -253,28 +264,12 @@ class HumanoidEnv(PipelineEnv):
             data.cvel[1:].ravel(),
             data.qfrc_actuator,
         ]
-
-        # qpos_component = data.qpos
-        # qvel_component = data.qvel
-        # cinert_component = data.cinert
-        # cvel_component = data.cvel
-        # qfrc_actuator_component = data.qfrc_actuator
-
-        # # Print lengths of each component
-        # print("Length of qpos_component:", qpos_component.shape)
-        # print("Length of qvel_component:", qvel_component.shape)
-        # print("Length of cinert_component:", cinert_component.shape)
-        # print("Length of cvel_component:", cvel_component.shape)
-        # print("Length of qfrc_actuator_component:", qfrc_actuator_component.shape)
-
-        # breakpoint()
-
-
-
+        
         return jnp.concatenate(obs_components)
 
 
 ################## WRAPPERS ##################
+
 
 class EnvWrapper(object):
     """Base class for Gymnax wrappers."""
@@ -285,6 +280,7 @@ class EnvWrapper(object):
     # provide proxy access to regular attributes of wrapped object
     def __getattr__(self, name):
         return getattr(self._env, name)
+
 
 # @struct.dataclass
 # class LogEnvState:
@@ -338,6 +334,7 @@ class EnvWrapper(object):
 #         info["returned_episode"] = done
 #         return obs, state, reward, done, info
 
+
 class ClipAction(EnvWrapper):
     def __init__(self, env, low=-1.0, high=1.0):
         super().__init__(env)
@@ -352,7 +349,7 @@ class ClipAction(EnvWrapper):
             obs=env_state.obs,
             reward=env_state.reward,
             done=env_state.done,
-            metrics=env_state.metrics
+            metrics=env_state.metrics,
         )
 
 
@@ -368,7 +365,7 @@ class TransformObservation(EnvWrapper):
             obs=self.transform_obs(env_state.obs),
             reward=env_state.reward,
             done=env_state.done,
-            metrics=env_state.metrics
+            metrics=env_state.metrics,
         )
 
     def step(self, state, action, key):
@@ -378,7 +375,7 @@ class TransformObservation(EnvWrapper):
             obs=self.transform_obs(env_state.obs),
             reward=env_state.reward,
             done=env_state.done,
-            metrics=env_state.metrics
+            metrics=env_state.metrics,
         )
 
 
@@ -394,7 +391,7 @@ class TransformReward(EnvWrapper):
             obs=env_state.obs,
             reward=self.transform_reward(env_state.reward),
             done=env_state.done,
-            metrics=env_state.metrics
+            metrics=env_state.metrics,
         )
 
 
@@ -402,13 +399,14 @@ class VecEnv(EnvWrapper):
     def __init__(self, env):
         super().__init__(env)
         self.reset = jax.vmap(self._env.reset, in_axes=(0))
-        self.step = jax.vmap(self._env.step, in_axes=(None, 0, 0)) # state
+        self.step = jax.vmap(self._env.step, in_axes=(None, 0, 0))  # state
 
 
 class NormalizeVecObsState(State):
     norm_mean: jnp.ndarray
     norm_var: jnp.ndarray
     norm_count: float
+
 
 class NormalizeVecObservation(EnvWrapper):
     def __init__(self, env):
@@ -421,7 +419,7 @@ class NormalizeVecObservation(EnvWrapper):
             **state.__dict__,
             norm_mean=jnp.zeros_like(obs),
             norm_var=jnp.ones_like(obs),
-            norm_count=1e-4
+            norm_count=1e-4,
         )
 
     def step(self, state, action, key):
@@ -448,11 +446,13 @@ class NormalizeVecObservation(EnvWrapper):
             **next_state.__dict__,
             norm_mean=new_mean,
             norm_var=new_var,
-            norm_count=new_count
+            norm_count=new_count,
         )
 
         # Normalize the observation
-        new_state.obs = (obs - new_state.norm_mean) / jnp.sqrt(new_state.norm_var + 1e-8)
+        new_state.obs = (obs - new_state.norm_mean) / jnp.sqrt(
+            new_state.norm_var + 1e-8
+        )
 
         return new_state
 
@@ -489,12 +489,14 @@ class NormalizeVecReward(EnvWrapper):
             obs=obs,
             reward=env_state.reward,
             done=env_state.done,
-            metrics=env_state.metrics
+            metrics=env_state.metrics,
         )
 
     def step(self, state, action, key):
         env_state = self._env.step(state.pipeline_state, action, key)
-        return_val = state.return_val * self.gamma * (1 - env_state.done) + env_state.reward
+        return_val = (
+            state.return_val * self.gamma * (1 - env_state.done) + env_state.reward
+        )
 
         batch_mean = jnp.mean(return_val, axis=0)
         batch_var = jnp.var(return_val, axis=0)
@@ -523,8 +525,9 @@ class NormalizeVecReward(EnvWrapper):
             obs=env_state.obs,
             reward=normalized_reward,
             done=env_state.done,
-            metrics=env_state.metrics
+            metrics=env_state.metrics,
         )
+
 
 ################## TEST ENVIRONMENT RUN ##################
 
