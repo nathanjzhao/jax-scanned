@@ -26,11 +26,11 @@ EPSILON = 1e-4
 logger = logging.getLogger(__name__)
 
 REWARD_CONFIG = {
-    "termination_height": 0.1,
+    "termination_height": 0.01,
     "height_limits": {"min_z": 0, "max_z": 2.0},
     "is_healthy_reward": 5,
     "original_pos_reward": {
-        "exp_coefficient": -2,
+        "exp_coefficient": 2,
         "subtraction_factor": 0.2,
         "max_diff_norm": 0.5,
     },
@@ -234,9 +234,9 @@ class HumanoidEnv(PipelineEnv):
         metrics["return_avg"] = new_return_mean
         metrics["return_var"] = new_return_var 
         metrics["return_count"] = new_return_count
-
-        metrics["return_norm"] = (new_return_val) / (jnp.sqrt(metrics["return_var"] + EPSILON))
         metrics["return_val"] = new_return_val
+
+        metrics["return_norm"] = (reward) / (jnp.sqrt(metrics["return_var"] + EPSILON))
 
 
 
@@ -299,7 +299,7 @@ class HumanoidEnv(PipelineEnv):
         )
         # total_reward = 0.1 * ctrl_cost + 5 * is_healthy + 1.25 * velocity
 
-        return total_reward
+        return total_reward 
 
     @partial(jax.jit, static_argnums=(0,))
     def is_done(self, state: MjxState) -> bool:
@@ -476,7 +476,7 @@ class NormalizeVecObservation(EnvWrapper):
             **state.__dict__,
             norm_mean=jnp.zeros_like(obs),
             norm_var=jnp.ones_like(obs),
-            norm_count=1e-4,
+            norm_count=EPSILON,
         )
 
     def step(self, state, action, key):
@@ -508,7 +508,7 @@ class NormalizeVecObservation(EnvWrapper):
 
         # Normalize the observation
         new_state.obs = (obs - new_state.norm_mean) / jnp.sqrt(
-            new_state.norm_var + 1e-8
+            new_state.norm_var + EPSILON
         )
 
         return new_state
@@ -576,7 +576,7 @@ class NormalizeVecReward(EnvWrapper):
             return_val=return_val,
             env_state=env_state,
         )
-        normalized_reward = env_state.reward / jnp.sqrt(new_state.var + 1e-8)
+        normalized_reward = env_state.reward / jnp.sqrt(new_state.var + EPSILON)
         return State(
             pipeline_state=new_state,
             obs=env_state.obs,

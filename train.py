@@ -13,6 +13,8 @@ import distrax
 from brax.envs import State
 from environment import ClipAction, HumanoidEnv, NormalizeVecObservation, NormalizeVecReward, VecEnv
 
+jax.config.update("jax_debug_nans", True)
+jax.config.update('jax_default_matmul_precision', 'highest')
 
 class ActorCritic(nn.Module):
     # dimension of the action space
@@ -28,7 +30,7 @@ class ActorCritic(nn.Module):
             activation = nn.relu
         else:
             activation = nn.tanh
-        
+        last_activation = nn.tanh
         #dense layer with 256 units. orthogonal initialization can lead to better perf
         actor_mean = nn.Dense(
             256, kernel_init=orthogonal(np.sqrt(2)), bias_init=constant(0.0)
@@ -372,7 +374,7 @@ if __name__ == "__main__":
         "NUM_ENVS": 2048,
         "NUM_STEPS": 10,
         # "TOTAL_TIMESTEPS": 2048 * 2000,
-        "TOTAL_TIMESTEPS": 5e7,
+        "TOTAL_TIMESTEPS": 3e8,
         "UPDATE_EPOCHS": 4,
         "NUM_MINIBATCHES": 32,
         "GAMMA": 0.99,
@@ -386,6 +388,7 @@ if __name__ == "__main__":
         "NORMALIZE_ENV": True,
         "DEBUG": True,
     }
+
     rng = jax.random.PRNGKey(30)
     train_jit = jax.jit(make_train(config))
     out = train_jit(rng)
