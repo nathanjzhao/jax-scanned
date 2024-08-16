@@ -374,59 +374,65 @@ class ClipAction(EnvWrapper):
         )
 
 
-class TransformObservation(EnvWrapper):
-    def __init__(self, env, transform_obs):
-        super().__init__(env)
-        self.transform_obs = transform_obs
+# class TransformObservation(EnvWrapper):
+#     def __init__(self, env, transform_obs):
+#         super().__init__(env)
+#         self.transform_obs = transform_obs
 
-    def reset(self, key):
-        env_state = self._env.reset(key)
-        return State(
-            pipeline_state=env_state.pipeline_state,
-            obs=self.transform_obs(env_state.obs),
-            reward=env_state.reward,
-            done=env_state.done,
-            metrics=env_state.metrics,
-        )
+#     def reset(self, key):
+#         env_state = self._env.reset(key)
+#         return State(
+#             pipeline_state=env_state.pipeline_state,
+#             obs=self.transform_obs(env_state.obs),
+#             reward=env_state.reward,
+#             done=env_state.done,
+#             metrics=env_state.metrics,
+#         )
 
-    def step(self, state, action, key):
-        env_state = self._env.step(state, action, key)
-        return State(
-            pipeline_state=env_state.pipeline_state,
-            obs=self.transform_obs(env_state.obs),
-            reward=env_state.reward,
-            done=env_state.done,
-            metrics=env_state.metrics,
-        )
-
-
-class TransformReward(EnvWrapper):
-    def __init__(self, env, transform_reward):
-        super().__init__(env)
-        self.transform_reward = transform_reward
-
-    def step(self, state, action, key):
-        env_state = self._env.step(state, action, key)
-        return State(
-            pipeline_state=env_state.pipeline_state,
-            obs=env_state.obs,
-            reward=self.transform_reward(env_state.reward),
-            done=env_state.done,
-            metrics=env_state.metrics,
-        )
+#     def step(self, state, action, key):
+#         env_state = self._env.step(state, action, key)
+#         return State(
+#             pipeline_state=env_state.pipeline_state,
+#             obs=self.transform_obs(env_state.obs),
+#             reward=env_state.reward,
+#             done=env_state.done,
+#             metrics=env_state.metrics,
+#         )
 
 
+# class TransformReward(EnvWrapper):
+#     def __init__(self, env, transform_reward):
+#         super().__init__(env)
+#         self.transform_reward = transform_reward
+
+#     def step(self, state, action, key):
+#         env_state = self._env.step(state, action, key)
+#         return State(
+#             pipeline_state=env_state.pipeline_state,
+#             obs=env_state.obs,
+#             reward=self.transform_reward(env_state.reward),
+#             done=env_state.done,
+#             metrics=env_state.metrics,
+#         )
+
+
+
+# def reset(self, rng: jnp.ndarray) -> State:
+# def step(self, env_state: State, action: jnp.ndarray, rng: jnp.ndarray) -> State:
 class VecEnv(EnvWrapper):
     def __init__(self, env):
         super().__init__(env)
         self.reset = jax.vmap(self._env.reset, in_axes=(0))
-        self.step = jax.vmap(self._env.step, in_axes=(None, 0, 0))  # state
+        self.step = jax.vmap(self._env.step, in_axes=(0, 0, 0))  # state
 
 
-class NormalizeVecObsState(State):
-    norm_mean: jnp.ndarray
-    norm_var: jnp.ndarray
-    norm_count: float
+@struct.dataclass
+class NormalizeVecObsState:
+    mean: jnp.ndarray
+    var: jnp.ndarray
+    count: float
+    env_state: State
+
 
 
 class NormalizeVecObservation(EnvWrapper):
@@ -434,48 +440,73 @@ class NormalizeVecObservation(EnvWrapper):
         super().__init__(env)
 
     def reset(self, key):
-        state = self._env.reset(key)
-        obs = state.obs
-        return NormalizeVecObsState(
-            **state.__dict__,
-            norm_mean=jnp.zeros_like(obs),
-            norm_var=jnp.ones_like(obs),
-            norm_count=1e-4,
+        reset_state = self._env.reset(key)
+        obs = reset_state.obs
+
+        state = NormalizeVecObsState(
+            mean=jnp.zeros_like(obs),
+            var=jnp.ones_like(obs),
+            count=1e-4,
+            env_state=reset_state,
         )
-
-    def step(self, state, action, key):
-        next_state = self._env.step(state, action, key)
-        obs = next_state.obs
-
-        # Compute new normalization statistics
         batch_mean = jnp.mean(obs, axis=0)
         batch_var = jnp.var(obs, axis=0)
         batch_count = obs.shape[0]
 
-        delta = batch_mean - state.norm_mean
-        tot_count = state.norm_count + batch_count
+        delta = batch_mean - state.mean
+        tot_count = state.count + batch_count
 
-        new_mean = state.norm_mean + delta * batch_count / tot_count
-        m_a = state.norm_var * state.norm_count
+        new_mean = state.mean + delta * batch_count / tot_count
+        m_a = state.var * state.count
         m_b = batch_var * batch_count
-        M2 = m_a + m_b + jnp.square(delta) * state.norm_count * batch_count / tot_count
+        M2 = m_a + m_b + jnp.square(delta) * state.count * batch_count / tot_count
         new_var = M2 / tot_count
         new_count = tot_count
 
-        # Create new state with updated normalization data
-        new_state = NormalizeVecObsState(
-            **next_state.__dict__,
-            norm_mean=new_mean,
-            norm_var=new_var,
-            norm_count=new_count,
+        state = NormalizeVecObsState(
+            mean=new_mean,
+            var=new_var,
+            count=new_count,
+            env_state=state.env_state,
         )
 
-        # Normalize the observation
-        new_state.obs = (obs - new_state.norm_mean) / jnp.sqrt(
-            new_state.norm_var + 1e-8
-        )
+        return (obs - state.mean) / jnp.sqrt(state.var + 1e-8), state
 
-        return new_state
+    def step(self, state, action, key):
+        step_state = self._env.step(state.env_state, action, key)
+
+        obs = step_state.obs
+        reward = step_state.reward
+        done = step_state.done
+        info = step_state.metrics
+
+        batch_mean = jnp.mean(obs, axis=0)
+        batch_var = jnp.var(obs, axis=0)
+        batch_count = obs.shape[0]
+
+        delta = batch_mean - state.mean
+        tot_count = state.count + batch_count
+
+        new_mean = state.mean + delta * batch_count / tot_count
+        m_a = state.var * state.count
+        m_b = batch_var * batch_count
+        M2 = m_a + m_b + jnp.square(delta) * state.count * batch_count / tot_count
+        new_var = M2 / tot_count
+        new_count = tot_count
+
+        state = NormalizeVecObsState(
+            mean=new_mean,
+            var=new_var,
+            count=new_count,
+            env_state=step_state,
+        )
+        return (
+            (obs - state.mean) / jnp.sqrt(state.var + 1e-8),
+            state,
+            reward,
+            done,
+            info,
+        )
 
 
 @struct.dataclass
@@ -490,38 +521,41 @@ class NormalizeVecRewEnvState:
         return getattr(self.env_state, name)
 
 
+@struct.dataclass
+class NormalizeVecRewEnvState:
+    mean: jnp.ndarray
+    var: jnp.ndarray
+    count: float
+    return_val: float
+    env_state: State
+
+
 class NormalizeVecReward(EnvWrapper):
     def __init__(self, env, gamma):
         super().__init__(env)
         self.gamma = gamma
 
     def reset(self, key):
-        env_state = self._env.reset(key)
-        obs = env_state.obs
+        obs, state = self._env.reset(key)
         batch_count = obs.shape[0]
         state = NormalizeVecRewEnvState(
             mean=0.0,
             var=1.0,
             count=1e-4,
             return_val=jnp.zeros((batch_count,)),
-            env_state=env_state,
+            env_state=state,
         )
-        return State(
-            obs=obs,
-            reward=env_state.reward,
-            done=env_state.done,
-            metrics=env_state.metrics,
-        )
+        return obs, state
 
     def step(self, state, action, key):
-        env_state = self._env.step(state.pipeline_state, action, key)
-        return_val = (
-            state.return_val * self.gamma * (1 - env_state.done) + env_state.reward
+        obs, env_state, reward, done, info = self._env.step(
+            state.env_state, action, key
         )
+        return_val = state.return_val * self.gamma * (1 - done) + reward
 
         batch_mean = jnp.mean(return_val, axis=0)
         batch_var = jnp.var(return_val, axis=0)
-        batch_count = env_state.obs.shape[0]
+        batch_count = obs.shape[0]
 
         delta = batch_mean - state.mean
         tot_count = state.count + batch_count
@@ -533,21 +567,14 @@ class NormalizeVecReward(EnvWrapper):
         new_var = M2 / tot_count
         new_count = tot_count
 
-        new_state = NormalizeVecRewEnvState(
+        state = NormalizeVecRewEnvState(
             mean=new_mean,
             var=new_var,
             count=new_count,
             return_val=return_val,
             env_state=env_state,
         )
-        normalized_reward = env_state.reward / jnp.sqrt(new_state.var + 1e-8)
-        return State(
-            pipeline_state=new_state,
-            obs=env_state.obs,
-            reward=normalized_reward,
-            done=env_state.done,
-            metrics=env_state.metrics,
-        )
+        return obs, state, reward / jnp.sqrt(state.var + 1e-8), done, info
 
 
 ################## TEST ENVIRONMENT RUN ##################

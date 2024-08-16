@@ -84,9 +84,9 @@ def main() -> None:
         pi, _ = network.apply(loaded_params, obs)
         action = pi.sample(seed=_rng)
 
+        print(action)
         rng, _rng = jax.random.split(rng)
-        clipped_action = jnp.clip(action, -1, 1)
-        state = step_fn(state, clipped_action, _rng)
+        state = step_fn(state, action, _rng)
 
         total_reward += state.reward
         episode_reward += state.reward
@@ -124,6 +124,7 @@ def main() -> None:
     total_reward /= max_frames
     print(f"Average reward: {total_reward}")
 
+    print(f"Rendering video with {len(rollout)} frames at {fps} fps")
     images = jnp.array(
         env.render(
             rollout[:: args.render_every],
@@ -132,7 +133,8 @@ def main() -> None:
             height=args.height,
         )
     )
-    print(f"Rendering video with {len(images)} frames at {fps} fps")
+
+    print("Video rendered")
     media.write_video(video_path, images, fps=fps)
     print(f"Video saved to {video_path}")
 

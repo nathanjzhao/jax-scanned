@@ -11,7 +11,7 @@ from typing import Sequence, NamedTuple
 from flax.training.train_state import TrainState
 import distrax
 from brax.envs import State
-from environment import (
+from environment_wrapper import (
     ClipAction,
     HumanoidEnv,
     NormalizeVecObservation,
@@ -123,21 +123,9 @@ def make_train(config):
             tx=tx,
         )
 
-        # # jit-ifying and vmap-ing functions
-        # @jax.jit
-        # def reset_fn(rng: jnp.ndarray) -> State:
-        #     rngs = jax.random.split(rng, config["NUM_ENVS"])
-        #     return jax.vmap(env.reset)(rngs)
-
-        # @jax.jit
-        # def step_fn(states: State, actions: jnp.ndarray, rng: jnp.ndarray) -> State:
-        #     return jax.vmap(env.step)(states, actions, rng)
-
         # INIT ENV
         rng, *reset_rng = jax.random.split(rng, config["NUM_ENVS"] + 1)
-        env_state = env.reset(jnp.array(reset_rng))
-
-        obs = env_state.obs
+        obs, env_state = env.reset(jnp.array(reset_rng))
 
         # TRAIN LOOP
         def _update_step(runner_state, unused):
@@ -157,14 +145,7 @@ def make_train(config):
                 # STEP ENV
                 # rngs in case environment "done" (terminates" and needs to be reset)
                 rng, *step_rng = jax.random.split(rng, config["NUM_ENVS"] + 1)
-                env_state = env.step(env_state, action, jnp.array(step_rng))
-
-                # Normalizing observations improves training
-                obs = env_state.obs
-
-                reward = env_state.reward
-                done = env_state.done
-                info = env_state.metrics
+                obs, env_state, reward, done, info = env.step(env_state, action, jnp.array(step_rng))
 
                 # STORE MEMORY
                 memory = Memory(done, action, value, reward, log_prob, last_obs, info)
