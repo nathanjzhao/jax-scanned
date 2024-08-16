@@ -24,8 +24,8 @@ from brax.mjx.base import State as MjxState
 logger = logging.getLogger(__name__)
 
 REWARD_CONFIG = {
-    "termination_height": -0.5,
-    "height_limits": {"min_z": -0.5, "max_z": 2.0},
+    "termination_height": -0.2,
+    "height_limits": {"min_z": -0.2, "max_z": 2.0},
     "is_healthy_reward": 5,
     "original_pos_reward": {
         "exp_coefficient": 2,
@@ -33,12 +33,17 @@ REWARD_CONFIG = {
         "max_diff_norm": 0.5,
     },
     "ctrl_cost_coefficient": 0.1,
-    "weights": {"ctrl_cost": 0.1, "original_pos_reward": 1, "is_healthy": 5},
+    "weights": {
+        "ctrl_cost": 0.1,
+        "original_pos_reward": 1,
+        "is_healthy": 5,
+        "action_smoothness_reward": 0.1,
+    },
 }
 
 
 REPO_DIR = "dora"  # humanoid_original or stompy or dora
-XML_NAME = "dora2.xml" # dora2
+XML_NAME = "dora2.xml"  # dora2
 
 # keyframe for default positions (or None for self.sys.qpos0)
 KEYFRAME_NAME = "default"
@@ -135,11 +140,19 @@ class HumanoidEnv(PipelineEnv):
 
         try:
             if KEYFRAME_NAME:
-                self.initial_qpos = jnp.array(mj_model.keyframe(self.keyframe_name).qpos)
+                self.initial_qpos = jnp.array(
+                    mj_model.keyframe(self.keyframe_name).qpos
+                )
         except:
             self.initial_qpos = jnp.array(sys.qpos0)
             print("No keyframe found, utilizing qpos0")
 
+        actuator_ctrlrange = []
+        for i in range(mj_model.nu):
+            ctrlrange = mj_model.actuator_ctrlrange[i]
+            actuator_ctrlrange.append(ctrlrange)
+
+        self.actuator_ctrlrange = jnp.array(actuator_ctrlrange)
 
     @partial(jax.jit, static_argnums=(0,))
     def reset(self, rng: jnp.ndarray) -> State:
@@ -147,7 +160,9 @@ class HumanoidEnv(PipelineEnv):
         rng, rng1, rng2 = jax.random.split(rng, 3)
 
         low, hi = -self.reset_noise_scale, self.reset_noise_scale
-        qpos = self.initial_qpos + jax.random.uniform(rng1, (self.sys.nq,), minval=low, maxval=hi)
+        qpos = self.initial_qpos + jax.random.uniform(
+            rng1, (self.sys.nq,), minval=low, maxval=hi
+        )
         qvel = jax.random.uniform(rng2, (self.sys.nv,), minval=low, maxval=hi)
 
         # initialize mjx state
@@ -168,12 +183,13 @@ class HumanoidEnv(PipelineEnv):
     def step(self, env_state: State, action: jnp.ndarray, rng: jnp.ndarray) -> State:
         """Run one timestep of the environment's dynamics and returns observations with rewards."""
         state = env_state.pipeline_state
-        state_step = self.pipeline_step(state, action)
-        obs_state = self.get_obs(state, action)
+        metrics = env_state.metrics
 
-        # get obs/reward/done of action + states
-        reward = self.compute_reward(state, state_step, action)
-        done = self.is_done(state_step)
+        # scaling actions according to ctrl range
+        low, high = self.actuator_ctrlrange[:, 0], self.actuator_ctrlrange[:, 1]
+        scaled_action = jnp.clip(low + (action + 1.0) * 0.5 * (high - low), low, high)
+        state_step = self.pipeline_step(state, scaled_action)
+        obs_state = self.get_obs(state, action)
 
         # reset env if done
         rng, rng1, rng2 = jax.random.split(rng, 3)
@@ -186,6 +202,14 @@ class HumanoidEnv(PipelineEnv):
         state_reset = self.pipeline_init(qpos, qvel)
         obs_reset = self.get_obs(state, jnp.zeros(self._action_size))
 
+        # get obs/reward/done of action + states
+        reward = self.compute_reward(
+            state,
+            state_step,
+            action,
+        )
+        done = self.is_done(state_step)
+
         # selectively replace state/obs with reset environment based on if done
         state = jax.tree.map(
             lambda x, y: jax.lax.select(done, x, y), state_reset, state_step
@@ -193,9 +217,6 @@ class HumanoidEnv(PipelineEnv):
         obs = jax.lax.select(done, obs_reset, obs_state)
 
         ########### METRIC TRACKING ###########
-
-        # Get previous metrics
-        metrics = env_state.metrics
 
         # Calculate new episode return and length
         new_episode_return = metrics["episode_returns"] + reward
@@ -219,7 +240,10 @@ class HumanoidEnv(PipelineEnv):
 
     @partial(jax.jit, static_argnums=(0,))
     def compute_reward(
-        self, state: MjxState, next_state: MjxState, action: jnp.ndarray
+        self,
+        state: MjxState,
+        next_state: MjxState,
+        action: jnp.ndarray,
     ) -> jnp.ndarray:
         """Compute the reward for standing and height."""
         min_z, max_z = (
@@ -233,16 +257,33 @@ class HumanoidEnv(PipelineEnv):
             REWARD_CONFIG["original_pos_reward"]["max_diff_norm"],
         )
 
+        # HEALTHY REWARD
         is_healthy = jnp.where(state.q[2] < min_z, 0.0, 1.0)
         is_healthy = jnp.where(state.q[2] > max_z, 0.0, is_healthy)
 
-        diff = self.initial_qpos - state.qpos
-
+        # MAINTAINING ORIGINAL POSITION REWARD
+        qpos0_diff = self.initial_qpos - state.qpos
         original_pos_reward = jnp.exp(
-            -exp_coef * jnp.linalg.norm(diff)
-        ) - subtraction_factor * jnp.clip(jnp.linalg.norm(diff), 0, max_diff_norm)
+            -exp_coef * jnp.linalg.norm(qpos0_diff)
+        ) - subtraction_factor * jnp.clip(jnp.linalg.norm(qpos0_diff), 0, max_diff_norm)
 
-        ctrl_cost = -jnp.sum(jnp.square(action))
+        # LOW ACCELERATION REWARD
+        low_acc_reward = jnp.exp(-jnp.linalg.norm(state.qacc) * 3)
+        # jax.debug.print("sqacc {}, lacc {}", state.qacc, low_acc_reward)
+
+        # VELOCITY DIFF / dt MATCHES ACCELERATION REWARD
+        own_acc = (next_state.qvel - state.qvel)/ (self.dt * self._n_frames)
+        acc_diff = (own_acc - state.qacc) * 0.1
+        matching_acc_reward = jnp.exp(
+            - 2 * jnp.linalg.norm(acc_diff)
+        ) - 2 * jnp.clip(jnp.linalg.norm(acc_diff), 0, 0.5)
+        # jax.debug.print("sqacc {}, own_acc {}, acc_diff {}, matching reward {}", state.qacc, own_acc, acc_diff, matching_acc_reward)
+
+
+
+        # CONTROL COST
+        ctrl_cost = 0  # BELOW ASSUMES DELTA CONTROLLER BUT MJX IS POSITIONAL
+        # ctrl_cost = -jnp.sum(jnp.square(action))
 
         # xpos = state.subtree_com[1][0]
         # next_xpos = next_state.subtree_com[1][0]
@@ -251,6 +292,8 @@ class HumanoidEnv(PipelineEnv):
         total_reward = (
             REWARD_CONFIG["weights"]["ctrl_cost"] * ctrl_cost
             + REWARD_CONFIG["weights"]["original_pos_reward"] * original_pos_reward
+            # + 0.2 * low_acc_reward
+            # + 0.2 * matching_acc_reward
             + REWARD_CONFIG["weights"]["is_healthy"] * is_healthy
         )
 
@@ -287,267 +330,6 @@ class HumanoidEnv(PipelineEnv):
             ]
 
         return jnp.concatenate(obs_components)
-
-
-################## WRAPPERS ##################
-
-
-class EnvWrapper(object):
-    """Base class for Gymnax wrappers."""
-
-    def __init__(self, env):
-        self._env = env
-
-    # provide proxy access to regular attributes of wrapped object
-    def __getattr__(self, name):
-        return getattr(self._env, name)
-
-
-# @struct.dataclass
-# class LogEnvState:
-#     env_state: State
-#     episode_returns: float
-#     episode_lengths: int
-#     returned_episode_returns: float
-#     returned_episode_lengths: int
-#     timestep: int
-
-# class LogWrapper(EnvWrapper):
-#     """Log the episode returns and lengths."""
-
-#     def __init__(self, env: environment.Environment):
-#         super().__init__(env)
-
-#     @partial(jax.jit, static_argnums=(0,))
-#     def reset(
-#         self, key: jnp.array
-#     ) -> Tuple[jnp.array, State]:
-#         obs, env_state = self._env.reset(key)
-#         state = LogEnvState(env_state, 0, 0, 0, 0, 0)
-#         return obs, state
-
-#     @partial(jax.jit, static_argnums=(0,))
-#     def step(
-#         self,
-#         key: chex.PRNGKey,
-#         state: State,
-#         action: Union[int, float],
-#         params: Optional[environment.EnvParams] = None,
-#     ) -> Tuple[chex.Array, State, float, bool, dict]:
-#         obs, env_state, reward, done, info = self._env.step(
-#             key, state.env_state, action, params
-#         )
-#         new_episode_return = state.episode_returns + reward
-#         new_episode_length = state.episode_lengths + 1
-#         state = LogEnvState(
-#             env_state=env_state,
-#             episode_returns=new_episode_return * (1 - done),
-#             episode_lengths=new_episode_length * (1 - done),
-#             returned_episode_returns=state.returned_episode_returns * (1 - done)
-#             + new_episode_return * done,
-#             returned_episode_lengths=state.returned_episode_lengths * (1 - done)
-#             + new_episode_length * done,
-#             timestep=state.timestep + 1,
-#         )
-#         info["returned_episode_returns"] = state.returned_episode_returns
-#         info["returned_episode_lengths"] = state.returned_episode_lengths
-#         info["timestep"] = state.timestep
-#         info["returned_episode"] = done
-#         return obs, state, reward, done, info
-
-
-class ClipAction(EnvWrapper):
-    def __init__(self, env, low=-1.0, high=1.0):
-        super().__init__(env)
-        self.low = low
-        self.high = high
-
-    def step(self, state, action, key):
-        action = jnp.clip(action, self.low, self.high)
-        env_state = self._env.step(state, action, key)
-        return State(
-            pipeline_state=env_state.pipeline_state,
-            obs=env_state.obs,
-            reward=env_state.reward,
-            done=env_state.done,
-            metrics=env_state.metrics,
-        )
-
-
-class TransformObservation(EnvWrapper):
-    def __init__(self, env, transform_obs):
-        super().__init__(env)
-        self.transform_obs = transform_obs
-
-    def reset(self, key):
-        env_state = self._env.reset(key)
-        return State(
-            pipeline_state=env_state.pipeline_state,
-            obs=self.transform_obs(env_state.obs),
-            reward=env_state.reward,
-            done=env_state.done,
-            metrics=env_state.metrics,
-        )
-
-    def step(self, state, action, key):
-        env_state = self._env.step(state, action, key)
-        return State(
-            pipeline_state=env_state.pipeline_state,
-            obs=self.transform_obs(env_state.obs),
-            reward=env_state.reward,
-            done=env_state.done,
-            metrics=env_state.metrics,
-        )
-
-
-class TransformReward(EnvWrapper):
-    def __init__(self, env, transform_reward):
-        super().__init__(env)
-        self.transform_reward = transform_reward
-
-    def step(self, state, action, key):
-        env_state = self._env.step(state, action, key)
-        return State(
-            pipeline_state=env_state.pipeline_state,
-            obs=env_state.obs,
-            reward=self.transform_reward(env_state.reward),
-            done=env_state.done,
-            metrics=env_state.metrics,
-        )
-
-
-class VecEnv(EnvWrapper):
-    def __init__(self, env):
-        super().__init__(env)
-        self.reset = jax.vmap(self._env.reset, in_axes=(0))
-        self.step = jax.vmap(self._env.step, in_axes=(None, 0, 0))  # state
-
-
-class NormalizeVecObsState(State):
-    norm_mean: jnp.ndarray
-    norm_var: jnp.ndarray
-    norm_count: float
-
-
-class NormalizeVecObservation(EnvWrapper):
-    def __init__(self, env):
-        super().__init__(env)
-
-    def reset(self, key):
-        state = self._env.reset(key)
-        obs = state.obs
-        return NormalizeVecObsState(
-            **state.__dict__,
-            norm_mean=jnp.zeros_like(obs),
-            norm_var=jnp.ones_like(obs),
-            norm_count=1e-4,
-        )
-
-    def step(self, state, action, key):
-        next_state = self._env.step(state, action, key)
-        obs = next_state.obs
-
-        # Compute new normalization statistics
-        batch_mean = jnp.mean(obs, axis=0)
-        batch_var = jnp.var(obs, axis=0)
-        batch_count = obs.shape[0]
-
-        delta = batch_mean - state.norm_mean
-        tot_count = state.norm_count + batch_count
-
-        new_mean = state.norm_mean + delta * batch_count / tot_count
-        m_a = state.norm_var * state.norm_count
-        m_b = batch_var * batch_count
-        M2 = m_a + m_b + jnp.square(delta) * state.norm_count * batch_count / tot_count
-        new_var = M2 / tot_count
-        new_count = tot_count
-
-        # Create new state with updated normalization data
-        new_state = NormalizeVecObsState(
-            **next_state.__dict__,
-            norm_mean=new_mean,
-            norm_var=new_var,
-            norm_count=new_count,
-        )
-
-        # Normalize the observation
-        new_state.obs = (obs - new_state.norm_mean) / jnp.sqrt(
-            new_state.norm_var + 1e-8
-        )
-
-        return new_state
-
-
-@struct.dataclass
-class NormalizeVecRewEnvState:
-    mean: jnp.ndarray
-    var: jnp.ndarray
-    count: float
-    return_val: float
-    env_state: MjxState
-
-    def __getattr__(self, name):
-        return getattr(self.env_state, name)
-
-
-class NormalizeVecReward(EnvWrapper):
-    def __init__(self, env, gamma):
-        super().__init__(env)
-        self.gamma = gamma
-
-    def reset(self, key):
-        env_state = self._env.reset(key)
-        obs = env_state.obs
-        batch_count = obs.shape[0]
-        state = NormalizeVecRewEnvState(
-            mean=0.0,
-            var=1.0,
-            count=1e-4,
-            return_val=jnp.zeros((batch_count,)),
-            env_state=env_state,
-        )
-        return State(
-            obs=obs,
-            reward=env_state.reward,
-            done=env_state.done,
-            metrics=env_state.metrics,
-        )
-
-    def step(self, state, action, key):
-        env_state = self._env.step(state.pipeline_state, action, key)
-        return_val = (
-            state.return_val * self.gamma * (1 - env_state.done) + env_state.reward
-        )
-
-        batch_mean = jnp.mean(return_val, axis=0)
-        batch_var = jnp.var(return_val, axis=0)
-        batch_count = env_state.obs.shape[0]
-
-        delta = batch_mean - state.mean
-        tot_count = state.count + batch_count
-
-        new_mean = state.mean + delta * batch_count / tot_count
-        m_a = state.var * state.count
-        m_b = batch_var * batch_count
-        M2 = m_a + m_b + jnp.square(delta) * state.count * batch_count / tot_count
-        new_var = M2 / tot_count
-        new_count = tot_count
-
-        new_state = NormalizeVecRewEnvState(
-            mean=new_mean,
-            var=new_var,
-            count=new_count,
-            return_val=return_val,
-            env_state=env_state,
-        )
-        normalized_reward = env_state.reward / jnp.sqrt(new_state.var + 1e-8)
-        return State(
-            pipeline_state=new_state,
-            obs=env_state.obs,
-            reward=normalized_reward,
-            done=env_state.done,
-            metrics=env_state.metrics,
-        )
 
 
 ################## TEST ENVIRONMENT RUN ##################
@@ -653,6 +435,7 @@ def run_environment_adhoc() -> None:
     images = jnp.array(
         env.render(
             rollout[:: args.render_every],
+            # camera="side",
             width=args.width,
             height=args.height,
         )

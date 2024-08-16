@@ -11,13 +11,12 @@ from typing import Sequence, NamedTuple
 from flax.training.train_state import TrainState
 import distrax
 from brax.envs import State
-from environment import (
-    ClipAction,
-    HumanoidEnv,
-    NormalizeVecObservation,
-    NormalizeVecReward,
-    VecEnv,
-)
+from environment import HumanoidEnv
+
+# print(dir(jax.config))
+jax.config.update("jax_debug_nans", True)
+jax.config.update("jax_enable_x64", True)
+jax.config.update("jax_default_matmul_precision", "highest")
 
 
 class ActorCritic(nn.Module):

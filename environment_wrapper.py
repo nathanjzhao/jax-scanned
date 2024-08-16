@@ -38,7 +38,7 @@ REWARD_CONFIG = {
 
 
 REPO_DIR = "dora"  # humanoid_original or stompy or dora
-XML_NAME = "dora2.xml" # dora2
+XML_NAME = "dora2.xml"  # dora2
 
 # keyframe for default positions (or None for self.sys.qpos0)
 KEYFRAME_NAME = "default"
@@ -135,11 +135,12 @@ class HumanoidEnv(PipelineEnv):
 
         try:
             if KEYFRAME_NAME:
-                self.initial_qpos = jnp.array(mj_model.keyframe(self.keyframe_name).qpos)
+                self.initial_qpos = jnp.array(
+                    mj_model.keyframe(self.keyframe_name).qpos
+                )
         except:
             self.initial_qpos = jnp.array(sys.qpos0)
             print("No keyframe found, utilizing qpos0")
-
 
     @partial(jax.jit, static_argnums=(0,))
     def reset(self, rng: jnp.ndarray) -> State:
@@ -147,7 +148,9 @@ class HumanoidEnv(PipelineEnv):
         rng, rng1, rng2 = jax.random.split(rng, 3)
 
         low, hi = -self.reset_noise_scale, self.reset_noise_scale
-        qpos = self.initial_qpos + jax.random.uniform(rng1, (self.sys.nq,), minval=low, maxval=hi)
+        qpos = self.initial_qpos + jax.random.uniform(
+            rng1, (self.sys.nq,), minval=low, maxval=hi
+        )
         qvel = jax.random.uniform(rng2, (self.sys.nv,), minval=low, maxval=hi)
 
         # initialize mjx state
@@ -167,6 +170,9 @@ class HumanoidEnv(PipelineEnv):
     @partial(jax.jit, static_argnums=(0,))
     def step(self, env_state: State, action: jnp.ndarray, rng: jnp.ndarray) -> State:
         """Run one timestep of the environment's dynamics and returns observations with rewards."""
+        # Get previous metrics
+        metrics = env_state.metrics
+
         state = env_state.pipeline_state
         state_step = self.pipeline_step(state, action)
         obs_state = self.get_obs(state, action)
@@ -193,9 +199,6 @@ class HumanoidEnv(PipelineEnv):
         obs = jax.lax.select(done, obs_reset, obs_state)
 
         ########### METRIC TRACKING ###########
-
-        # Get previous metrics
-        metrics = env_state.metrics
 
         # Calculate new episode return and length
         new_episode_return = metrics["episode_returns"] + reward
@@ -416,7 +419,6 @@ class ClipAction(EnvWrapper):
 #         )
 
 
-
 # def reset(self, rng: jnp.ndarray) -> State:
 # def step(self, env_state: State, action: jnp.ndarray, rng: jnp.ndarray) -> State:
 class VecEnv(EnvWrapper):
@@ -432,7 +434,6 @@ class NormalizeVecObsState:
     var: jnp.ndarray
     count: float
     env_state: State
-
 
 
 class NormalizeVecObservation(EnvWrapper):

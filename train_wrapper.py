@@ -145,7 +145,9 @@ def make_train(config):
                 # STEP ENV
                 # rngs in case environment "done" (terminates" and needs to be reset)
                 rng, *step_rng = jax.random.split(rng, config["NUM_ENVS"] + 1)
-                obs, env_state, reward, done, info = env.step(env_state, action, jnp.array(step_rng))
+                obs, env_state, reward, done, info = env.step(
+                    env_state, action, jnp.array(step_rng)
+                )
 
                 # STORE MEMORY
                 memory = Memory(done, action, value, reward, log_prob, last_obs, info)

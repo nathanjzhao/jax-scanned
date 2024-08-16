@@ -8,12 +8,19 @@ import jax
 import jax.numpy as jnp
 import mediapy as media
 
-from environment import HumanoidEnv
+from environment_wrapper import (
+    ClipAction,
+    HumanoidEnv,
+    NormalizeVecObservation,
+    NormalizeVecReward,
+    VecEnv,
+)
 from train import ActorCritic
 import os
 
-os.environ["MUJOCO_GL"] = "egl"
-os.environ["DISPLAY"] = ":0"
+NORMALIZE_ENV = True
+GAMMA = 0.99
+ACTIVATION = "tanh"
 
 
 def load_model(filename) -> ActorCritic:
@@ -55,42 +62,45 @@ def main() -> None:
     args = parser.parse_args()
 
     env = HumanoidEnv()
+    env = ClipAction(env)
+    env = VecEnv(env)
+
+    if NORMALIZE_ENV:
+        env = NormalizeVecObservation(env)
+        env = NormalizeVecReward(env, GAMMA)
+
     rng = jax.random.PRNGKey(0)
 
     model_path = f"models/{args.env_name}_model.pkl"
     video_path = f"videos/{args.env_name}_video.mp4"
     print("Loading model from", model_path)
     loaded_params = load_model(model_path)
-    network = ActorCritic(env.action_size, activation="tanh")
-
-    reset_fn = jax.jit(env.reset)
-    step_fn = jax.jit(env.step)
+    network = ActorCritic(env.action_size, activation=ACTIVATION)
 
     fps = int(1 / env.dt)
     max_frames = int(args.video_length * fps)
     rollout: list[Any] = []
     episode_reward = 0
     total_reward = 0
-    rng, reset_rng = jax.random.split(rng)
-    state = reset_fn(reset_rng)
+    rng, *reset_rng = jax.random.split(rng)
+    obs, state = env.reset(jnp.array(reset_rng))
 
     episodes = 0
 
     for step in range(max_frames):
-        obs = state.obs
-        rollout.append(state.pipeline_state)
+        rollout.append(state.env_state.env_state.pipeline_state)
 
         rng, _rng = jax.random.split(rng)
         pi, _ = network.apply(loaded_params, obs)
         action = pi.sample(seed=_rng)
 
-        rng, _rng = jax.random.split(rng)
-        state = step_fn(state, action, _rng)
+        rng, *step_rng = jax.random.split(rng)
+        obs, state, reward, done, info = env.step(state, action, jnp.array(step_rng))
 
-        total_reward += state.reward
-        episode_reward += state.reward
+        total_reward += reward
+        episode_reward += reward
 
-        if state.done:
+        if done:
             episodes += 1
             print("Episode", episodes, "reward:", episode_reward)
             episode_reward = 0
