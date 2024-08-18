@@ -185,10 +185,7 @@ class HumanoidEnv(PipelineEnv):
         state = env_state.pipeline_state
         metrics = env_state.metrics
 
-        # scaling actions according to ctrl range
-        low, high = self.actuator_ctrlrange[:, 0], self.actuator_ctrlrange[:, 1]
-        scaled_action = jnp.clip(low + (action + 1.0) * 0.5 * (high - low), low, high)
-        state_step = self.pipeline_step(state, scaled_action)
+        state_step = self.pipeline_step(state, action) # because scaled action so bad...
         obs_state = self.get_obs(state, action)
 
         # reset env if done
@@ -416,7 +413,7 @@ def run_environment_adhoc() -> None:
 
             rng, action_rng = jax.random.split(rng)
             action = jax.random.uniform(
-                action_rng, (action_size,), minval=-1.0, maxval=1.0
+                action_rng, (action_size,), minval=0, maxval=1.0
             )  # placeholder for an action
 
             rng, step_rng = jax.random.split(rng)

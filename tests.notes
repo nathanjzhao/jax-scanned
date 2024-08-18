@@ -1,0 +1,3 @@
+hypothesis: qacc is too high becuase position encoding
+- clamping qvel doesn't even do anything (tested with using adhoc random events). annoying.
+- mjpython mujoco viewer does not have the same problem -- qaccs aren't extremely large

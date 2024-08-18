@@ -11,7 +11,7 @@ from typing import Sequence, NamedTuple
 from flax.training.train_state import TrainState
 import distrax
 from brax.envs import State
-from environment_wrapper import (
+from environment_walk import (
     ClipAction,
     HumanoidEnv,
     NormalizeVecObservation,
@@ -330,7 +330,7 @@ if __name__ == "__main__":
         "NUM_ENVS": 2048,
         "NUM_STEPS": 10,
         # "TOTAL_TIMESTEPS": 2048 * 2000,
-        "TOTAL_TIMESTEPS": 5e8,
+        "TOTAL_TIMESTEPS": 1e9,
         "UPDATE_EPOCHS": 4,
         "NUM_MINIBATCHES": 32,
         "GAMMA": 0.99,
