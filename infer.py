@@ -3,7 +3,7 @@
 import argparse
 import importlib
 import pickle
-from typing import Any, Tuple
+from typing import Any
 
 import jax
 import jax.numpy as jnp
@@ -53,10 +53,10 @@ def main() -> None:
         "--height", type=int, default=480, help="height of the video frame"
     )
     parser.add_argument(
-        "--env_module", 
-        type=str, 
-        required=True, 
-        help="Name of the environment module to import."
+        "--env_module",
+        type=str,
+        required=True,
+        help="Name of the environment module to import.",
     )
     args = parser.parse_args()
 

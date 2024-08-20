@@ -6,7 +6,6 @@ from ppo_continuous_action import ActorCritic
 from wrappers import (
     LogWrapper,
     BraxGymnaxWrapper,
-    VecEnv,
     NormalizeVecObservation,
     NormalizeVecReward,
     ClipAction,
@@ -46,7 +45,7 @@ if config["NORMALIZE_ENV"]:
     env = NormalizeVecReward(env, config["GAMMA"])
 
 network = ActorCritic(env.action_size, activation=config["ACTIVATION"])
-model_path = f"models/purejax_ppo_continuous_model.pkl"
+model_path = "models/purejax_ppo_continuous_model.pkl"
 loaded_params = load_model(model_path)
 rng = jax.random.PRNGKey(0)
 
@@ -72,4 +71,4 @@ cum_rewards = jnp.cumsum(jnp.array(reward_seq))
 # this doesn't work because gymnax is a scam
 vis = Visualizer(env, env_params, state_seq, cum_rewards)
 
-vis.animate(f"videos/anim.gif")
+vis.animate("videos/anim.gif")

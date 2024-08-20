@@ -320,5 +320,5 @@ if __name__ == "__main__":
     out = train_jit(rng)
 
     save_model(
-        out["runner_state"][0].params, f"models/purejax_ppo_continuous_model.pkl"
+        out["runner_state"][0].params, "models/purejax_ppo_continuous_model.pkl"
     )

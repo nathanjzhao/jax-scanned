@@ -11,7 +11,7 @@ from flax.linen.initializers import constant, orthogonal
 from typing import Sequence, NamedTuple
 from flax.training.train_state import TrainState
 import distrax
-from brax.envs import State
+
 
 # Bijects all outputs to Tanh distribution
 class NormalTanhDistribution(distrax.Transformed):
@@ -27,6 +27,7 @@ class NormalTanhDistribution(distrax.Transformed):
     def entropy(self):
         return self.distribution.entropy()
 
+
 class ActorCritic(nn.Module):
     action_dim: Sequence[int]
     activation: str = "tanh"
@@ -37,10 +38,10 @@ class ActorCritic(nn.Module):
         if self.activation == "relu":
             activation = nn.relu
         elif self.activation == "swish":
-            activation = nn.swish # NOTE: would require lecun uniform transform
+            activation = nn.swish  # NOTE: would require lecun uniform transform
         else:
             activation = nn.tanh
-        
+
         # Actor network
         actor_hidden = nn.Dense(
             256, kernel_init=orthogonal(np.sqrt(2)), bias_init=constant(0.0)
@@ -50,16 +51,16 @@ class ActorCritic(nn.Module):
             128, kernel_init=orthogonal(np.sqrt(2)), bias_init=constant(0.0)
         )(actor_hidden)
         actor_hidden = activation(actor_hidden)
-        
+
         # Mean and log_std for the Normal distribution (pre-tanh)
         actor_mean = nn.Dense(
             self.action_dim, kernel_init=orthogonal(0.01), bias_init=constant(0.0)
         )(actor_hidden)
         actor_log_std = self.param("log_std", nn.initializers.zeros, (self.action_dim,))
-        
+
         # Ensure minimum standard deviation
         actor_std = jnp.maximum(jnp.exp(actor_log_std), self.min_std)
-        
+
         # Create NormalTanhDistribution
         pi = NormalTanhDistribution(loc=actor_mean, scale=actor_std)
 

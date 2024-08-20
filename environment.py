@@ -7,10 +7,8 @@ import os
 import shutil
 import subprocess
 import tempfile
-import cv2
-from flax import struct
 from pathlib import Path
-from typing import Any, Optional, Tuple
+from typing import Any
 
 import jax
 import jax.numpy as jnp
@@ -37,7 +35,7 @@ REWARD_CONFIG = {
         "ctrl_cost": 0.1,
         "original_pos_reward": 1,
         "is_healthy": 5,
-        "velocity": 1.25, 
+        "velocity": 1.25,
     },
 }
 
@@ -186,7 +184,9 @@ class HumanoidEnv(PipelineEnv):
         state = env_state.pipeline_state
         metrics = env_state.metrics
 
-        state_step = self.pipeline_step(state, action) # because scaled action so bad...
+        state_step = self.pipeline_step(
+            state, action
+        )  # because scaled action so bad...
         obs_state = self.get_obs(state, action)
 
         # reset env if done
@@ -208,8 +208,13 @@ class HumanoidEnv(PipelineEnv):
         )
         done = self.is_done(state_step)
 
+        # setting done = True if nans in next state
+        is_nan = jax.tree_util.tree_map(lambda x: jnp.any(jnp.isnan(x)), state_step)
+        any_nan = jax.tree_util.tree_reduce(jnp.logical_or, is_nan, initializer=False)
+        done = jnp.logical_or(done, any_nan)
+
         # selectively replace state/obs with reset environment based on if done
-        state = jax.tree.map(
+        new_state = jax.tree.map(
             lambda x, y: jax.lax.select(done, x, y), state_reset, state_step
         )
         obs = jax.lax.select(done, obs_reset, obs_state)
@@ -233,7 +238,7 @@ class HumanoidEnv(PipelineEnv):
         metrics["returned_episode"] = done
 
         return env_state.replace(
-            pipeline_state=state, obs=obs, reward=reward, done=done, metrics=metrics
+            pipeline_state=new_state, obs=obs, reward=reward, done=done, metrics=metrics
         )
 
     @partial(jax.jit, static_argnums=(0,))
@@ -265,7 +270,6 @@ class HumanoidEnv(PipelineEnv):
         #     -exp_coef * jnp.linalg.norm(qpos0_diff)
         # ) - subtraction_factor * jnp.clip(jnp.linalg.norm(qpos0_diff), 0, max_diff_norm)
 
-
         ctrl_cost = -jnp.sum(jnp.square(action))
 
         xpos = state.subtree_com[1][0]
@@ -291,7 +295,9 @@ class HumanoidEnv(PipelineEnv):
             REWARD_CONFIG["height_limits"]["min_z"],
             REWARD_CONFIG["height_limits"]["max_z"],
         )
-        height_condition = jnp.logical_not(jnp.logical_and(min_z < com_height, com_height < max_z))
+        height_condition = jnp.logical_not(
+            jnp.logical_and(min_z < com_height, com_height < max_z)
+        )
 
         # Check if any element in qvel or qacc exceeds 1e5
         velocity_condition = jnp.any(jnp.abs(state.qvel) > 1e5)

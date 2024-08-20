@@ -7,10 +7,9 @@ import os
 import shutil
 import subprocess
 import tempfile
-import cv2
 from flax import struct
 from pathlib import Path
-from typing import Any, Optional, Tuple
+from typing import Any
 
 import jax
 import jax.numpy as jnp
@@ -20,25 +19,19 @@ from brax.envs.base import PipelineEnv, State
 from brax.io import mjcf
 from brax.mjx.base import State as MjxState
 
-
+# TODO:
+# - create an environment for distance from start
 logger = logging.getLogger(__name__)
 
 REWARD_CONFIG = {
-    "termination_height": -0.5,
-    "height_limits": {"min_z": -0.5, "max_z": 2.0},
-    "is_healthy_reward": 5,
-    "original_pos_reward": {
-        "exp_coefficient": 2,
-        "subtraction_factor": 0.2,
-        "max_diff_norm": 0.5,
-    },
-    "ctrl_cost_coefficient": 0.1,
-    "weights": {"ctrl_cost": 0.1, "original_pos_reward": 1, "is_healthy": 5},
+    "termination_height": 0,
+    "height_limits": {"min_z": 0, "max_z": 2.0},
+    "weights": {"ctrl_cost": 0.1, "velocity": 0.2, "is_healthy": 5, "height": 1.0},
 }
 
 
-REPO_DIR = "dora"  # humanoid_original or stompy or dora
-XML_NAME = "dora2.xml"  # dora2
+REPO_DIR = "humanoid_original"  # humanoid_original or stompy or dora
+XML_NAME = "humanoid.xml"  # dora2
 
 # keyframe for default positions (or None for self.sys.qpos0)
 KEYFRAME_NAME = "default"
@@ -124,6 +117,7 @@ class HumanoidEnv(PipelineEnv):
         xml_path = os.path.join(environments_path, REPO_DIR, XML_NAME)
         mj_model: mujoco.MjModel = mujoco.MjModel.from_xml_path(xml_path)
 
+        # can definitely look at this more https://mujoco.readthedocs.io/en/latest/APIreference/APItypes.html#mjtdisablebit
         mj_model.opt.solver = mujoco.mjtSolver.mjSOL_CG
         mj_model.opt.iterations = 6
         mj_model.opt.ls_iterations = 6
@@ -224,37 +218,28 @@ class HumanoidEnv(PipelineEnv):
     def compute_reward(
         self, state: MjxState, next_state: MjxState, action: jnp.ndarray
     ) -> jnp.ndarray:
-        """Compute the reward for standing and height."""
+        """Compute the reward for walking and height."""
         min_z, max_z = (
             REWARD_CONFIG["height_limits"]["min_z"],
             REWARD_CONFIG["height_limits"]["max_z"],
         )
 
-        exp_coef, subtraction_factor, max_diff_norm = (
-            REWARD_CONFIG["original_pos_reward"]["exp_coefficient"],
-            REWARD_CONFIG["original_pos_reward"]["subtraction_factor"],
-            REWARD_CONFIG["original_pos_reward"]["max_diff_norm"],
-        )
-
         is_healthy = jnp.where(state.q[2] < min_z, 0.0, 1.0)
         is_healthy = jnp.where(state.q[2] > max_z, 0.0, is_healthy)
 
-        diff = self.initial_qpos - state.qpos
-
-        original_pos_reward = jnp.exp(
-            -exp_coef * jnp.linalg.norm(diff)
-        ) - subtraction_factor * jnp.clip(jnp.linalg.norm(diff), 0, max_diff_norm)
-
         ctrl_cost = -jnp.sum(jnp.square(action))
 
-        # xpos = state.subtree_com[1][0]
-        # next_xpos = next_state.subtree_com[1][0]
-        # velocity = (next_xpos - xpos) / self.dt
+        xpos = state.subtree_com[1][0]
+        next_xpos = next_state.subtree_com[1][0]
+        velocity = (next_xpos - xpos) / self.dt
+
+        height = state.q[2]
 
         total_reward = (
             REWARD_CONFIG["weights"]["ctrl_cost"] * ctrl_cost
-            + REWARD_CONFIG["weights"]["original_pos_reward"] * original_pos_reward
             + REWARD_CONFIG["weights"]["is_healthy"] * is_healthy
+            + REWARD_CONFIG["weights"]["velocity"] * velocity
+            + REWARD_CONFIG["weights"]["height"] * height
         )
 
         return total_reward
@@ -265,10 +250,15 @@ class HumanoidEnv(PipelineEnv):
         # Get the height of the robot's center of mass
         com_height = state.q[2]
 
-        # Set a termination threshold
-        termination_height = REWARD_CONFIG["termination_height"]
+        min_z, max_z = (
+            REWARD_CONFIG["height_limits"]["min_z"],
+            REWARD_CONFIG["height_limits"]["max_z"],
+        )
+        condition = jnp.logical_not(
+            jnp.logical_and(min_z < com_height, com_height < max_z)
+        )
 
-        return com_height < termination_height
+        return condition
 
     @partial(jax.jit, static_argnums=(0,))
     def get_obs(self, data: MjxState, action: jnp.ndarray) -> jnp.ndarray:

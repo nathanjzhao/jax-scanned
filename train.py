@@ -12,7 +12,6 @@ from typing import Sequence, NamedTuple
 from flax.training.train_state import TrainState
 import distrax
 from brax.envs import State
-from environment_walk import HumanoidEnv
 
 # print(dir(jax.config))
 # jax.config.update("jax_debug_nans", True)
