@@ -1,6 +1,7 @@
 """Runs inference for the trained model."""
 
 import argparse
+import importlib
 import pickle
 from typing import Any, Tuple
 
@@ -8,18 +9,9 @@ import jax
 import jax.numpy as jnp
 import mediapy as media
 
-from environment_wrapper import (
-    ClipAction,
-    HumanoidEnv,
-    NormalizeVecObservation,
-    NormalizeVecReward,
-    VecEnv,
-)
-from train import ActorCritic
+from train_wrapper import ActorCritic
 import os
 
-NORMALIZE_ENV = True
-GAMMA = 0.99
 ACTIVATION = "tanh"
 
 
@@ -59,15 +51,47 @@ def main() -> None:
     parser.add_argument(
         "--height", type=int, default=480, help="height of the video frame"
     )
+    parser.add_argument(
+        "--env_module", 
+        type=str, 
+        required=True, 
+        help="Name of the environment module to import."
+    )
+    parser.add_argument(
+        "--gamma", 
+        type=float, 
+        default=0.99, 
+        help="Discount factor for the environment."
+    )
+    parser.add_argument(
+        "--normalize_env", 
+        type=bool, 
+        default=True, 
+        help="Whether to normalize the environment."
+    )
+    parser.add_argument(
+        "--num_envs", 
+        type=int, 
+        default=2048, 
+        help="Number of environments to run in parallel."
+    )
+    parser.add_argument(
+        "--debug",  
+        type=bool,
+        default=False,
+        help="Whether to run in debug mode."
+    )
     args = parser.parse_args()
+    
+    env_module = importlib.import_module(args.env_module)
 
-    env = HumanoidEnv()
-    env = ClipAction(env)
-    env = VecEnv(env)
+    env = env_module.HumanoidEnv()
+    env = env_module.ClipAction(env)
+    env = env_module.VecEnv(env)
 
-    if NORMALIZE_ENV:
-        env = NormalizeVecObservation(env)
-        env = NormalizeVecReward(env, GAMMA)
+    if args.normalize_env:
+        env = env_module.NormalizeVecObservation(env)
+        env = env_module.NormalizeVecReward(env, args.gamma)
 
     rng = jax.random.PRNGKey(0)
 
@@ -79,64 +103,100 @@ def main() -> None:
 
     fps = int(1 / env.dt)
     max_frames = int(args.video_length * fps)
-    rollout: list[Any] = []
     episode_reward = 0
     total_reward = 0
-    rng, *reset_rng = jax.random.split(rng)
+    rng, *reset_rng = jax.random.split(rng, args.num_envs + 1)
     obs, state = env.reset(jnp.array(reset_rng))
 
     episodes = 0
 
-    for step in range(max_frames):
-        rollout.append(state.env_state.env_state.pipeline_state)
-
-        rng, _rng = jax.random.split(rng)
-        pi, _ = network.apply(loaded_params, obs)
-        action = pi.sample(seed=_rng)
-
-        rng, *step_rng = jax.random.split(rng)
-        obs, state, reward, done, info = env.step(state, action, jnp.array(step_rng))
-
-        total_reward += reward
-        episode_reward += reward
-
-        if done:
-            episodes += 1
-            print("Episode", episodes, "reward:", episode_reward)
-            episode_reward = 0
-
-        if len(rollout) >= max_frames:
-            break
-
-    # def scan_env(carry, t):
-    #     rollout, total_reward, state, rng = carry
-
-    #     obs = state.obs
+    # for step in range(max_frames):
+    #     first_state = jax.tree_map(lambda x: x[0], state.env_state.env_state.pipeline_state)
+    #     rollout.append(first_state)
 
     #     rng, _rng = jax.random.split(rng)
     #     pi, _ = network.apply(loaded_params, obs)
     #     action = pi.sample(seed=_rng)
 
-    #     rng, _rng = jax.random.split(rng)
-    #     state = step_fn(state, action, _rng)
-    #     total_reward += state.reward
+    #     rng, *step_rng = jax.random.split(rng, 2049)
+    #     obs, state, reward, done, info = env.step(state, action, jnp.array(step_rng))
 
-    #     rollout = rollout.at[t].set(state.obs)
+    #     total_reward += reward
+    #     episode_reward += reward
 
-    #     return (rollout, total_reward, state, rng), None
+    #     if done[0]:
+    #         episodes += 1
+    #         print("Episode", episodes, "reward:", episode_reward)
+    #         episode_reward = 0
 
-    # rollout = jnp.empty((max_frames, env.observation_size))
-    # (rollout, total_reward, _, _ ), _ = jax.lax.scan(
-    #     scan_env, (rollout, 0, state, rng), jnp.arange(max_frames)
-    # )
+    def step_fn(carry, step):
+        rng, state, obs, total_reward, episode_reward, episodes, rollout_flat = carry
+        
+        # Get first state
+        first_state = jax.tree.map(lambda x: x[0], state.env_state.env_state.pipeline_state)
+        first_state_flat = jax.tree_util.tree_flatten(first_state)[0]
+
+        # Update rollout_flat at the current step
+        rollout_flat = jax.tree.map(
+            lambda rollout, state_item: rollout.at[step].set(state_item),
+            rollout_flat,
+            first_state_flat
+        )
+        
+        rng, _rng = jax.random.split(rng)
+        pi, _ = network.apply(loaded_params, obs)
+        action = pi.sample(seed=_rng)
+        
+        rng, *step_rng = jax.random.split(rng, args.num_envs + 1)
+        obs, state, reward, done, info = env.step(state, action, jnp.array(step_rng))
+        
+        # Rollout on only first environment --> track reward and done of only first
+        total_reward += reward[0]
+        episode_reward += reward[0]
+        episodes = jnp.where(done[0], episodes + 1, episodes)
+        episode_reward = jnp.where(done[0], 0, episode_reward)
+
+        if args.debug:
+            def callback(step, rewards, episodes):
+                print(f"Step: {step}, Episodes: {episodes}, Reward: {episode_reward.mean()}")
+
+            jax.debug.callback(callback, step, reward, episodes)
+
+        
+        return (rng, state, obs, total_reward, episode_reward, episodes, rollout_flat), None
+
+    # Initialize rollout with the correct structure --- this is so that it is in JAX-scannable structure
+    initial_state = jax.tree.map(lambda x: x[0], state.env_state.env_state.pipeline_state)
+    initial_state_flat, tree_def = jax.tree_util.tree_flatten(initial_state)
+    
+    rollout_flat = jax.tree.map(
+        lambda x: jnp.empty((max_frames,) + x.shape, dtype=x.dtype),
+        initial_state_flat
+    )
+
+    # Initial carry value
+    init_carry = (rng, state, obs, total_reward, episode_reward, episodes, rollout_flat)
+
+    # Run the scan
+    final_carry, _ = jax.lax.scan(step_fn, init_carry, jnp.arange(max_frames), unroll=16)
+
+    # Unpack the final values
+    rng, state, obs, total_reward, episode_reward, episodes, rollout_flat = final_carry
+
+    # Unflatten and unroll the rollout
+    def unflatten_frame(frame_idx):
+        frame = jax.tree.map(lambda x: x[frame_idx], rollout_flat)
+        return jax.tree_util.tree_unflatten(tree_def, frame)
+
+    unflattened_rollout = [unflatten_frame(i) for i in range(max_frames)]
 
     total_reward /= max_frames
     print(f"Average reward: {total_reward}")
 
-    print(f"Rendering video with {len(rollout)} frames at {fps} fps")
+    print(f"Rendering video with {len(unflattened_rollout)} frames at {fps} fps")
     images = jnp.array(
         env.render(
-            rollout[:: args.render_every],
+            unflattened_rollout[:: args.render_every],
             width=args.width,
             height=args.height,
         )

@@ -1,4 +1,5 @@
 import argparse
+import importlib
 import os
 import pickle
 import jax
@@ -11,39 +12,58 @@ from typing import Sequence, NamedTuple
 from flax.training.train_state import TrainState
 import distrax
 from brax.envs import State
-from environment_walk import (
-    ClipAction,
-    HumanoidEnv,
-    NormalizeVecObservation,
-    NormalizeVecReward,
-    VecEnv,
-)
 
+# Bijects all outputs to Tanh distribution
+class NormalTanhDistribution(distrax.Transformed):
+    def __init__(self, loc, scale):
+        normal = distrax.MultivariateNormalDiag(loc=loc, scale_diag=scale)
+        tanh_bijector = distrax.Block(distrax.Tanh(), ndims=1)
+        super().__init__(distribution=normal, bijector=tanh_bijector)
+
+    def mode(self):
+        return self.bijector.forward(self.distribution.mode())
+
+    # NOTE: wrong btw but im not using entropy atm anyway :cat_smiling_emoji:
+    def entropy(self):
+        return self.distribution.entropy()
 
 class ActorCritic(nn.Module):
     action_dim: Sequence[int]
     activation: str = "tanh"
+    min_std: float = 0.0001
 
     @nn.compact
     def __call__(self, x):
         if self.activation == "relu":
             activation = nn.relu
+        elif self.activation == "swish":
+            activation = nn.swish # NOTE: would require lecun uniform transform
         else:
             activation = nn.tanh
-        actor_mean = nn.Dense(
+        
+        # Actor network
+        actor_hidden = nn.Dense(
             256, kernel_init=orthogonal(np.sqrt(2)), bias_init=constant(0.0)
         )(x)
-        actor_mean = activation(actor_mean)
-        actor_mean = nn.Dense(
-            256, kernel_init=orthogonal(np.sqrt(2)), bias_init=constant(0.0)
-        )(actor_mean)
-        actor_mean = activation(actor_mean)
+        actor_hidden = activation(actor_hidden)
+        actor_hidden = nn.Dense(
+            128, kernel_init=orthogonal(np.sqrt(2)), bias_init=constant(0.0)
+        )(actor_hidden)
+        actor_hidden = activation(actor_hidden)
+        
+        # Mean and log_std for the Normal distribution (pre-tanh)
         actor_mean = nn.Dense(
             self.action_dim, kernel_init=orthogonal(0.01), bias_init=constant(0.0)
-        )(actor_mean)
-        actor_logtstd = self.param("log_std", nn.initializers.zeros, (self.action_dim,))
-        pi = distrax.MultivariateNormalDiag(actor_mean, jnp.exp(actor_logtstd))
+        )(actor_hidden)
+        actor_log_std = self.param("log_std", nn.initializers.zeros, (self.action_dim,))
+        
+        # Ensure minimum standard deviation
+        actor_std = jnp.maximum(jnp.exp(actor_log_std), self.min_std)
+        
+        # Create NormalTanhDistribution
+        pi = NormalTanhDistribution(loc=actor_mean, scale=actor_std)
 
+        # Critic network (unchanged)
         critic = nn.Dense(
             256, kernel_init=orthogonal(np.sqrt(2)), bias_init=constant(0.0)
         )(x)
@@ -82,14 +102,16 @@ def make_train(config):
     config["MINIBATCH_SIZE"] = (
         config["NUM_ENVS"] * config["NUM_STEPS"] // config["NUM_MINIBATCHES"]
     )
-    env = HumanoidEnv()
-    # env = LogWrapper(env)
-    env = ClipAction(env)
-    env = VecEnv(env)
+
+    env_module = importlib.import_module(config["ENV_MODULE"])
+
+    env = env_module.HumanoidEnv()
+    env = env_module.ClipAction(env)
+    env = env_module.VecEnv(env)
 
     if config["NORMALIZE_ENV"]:
-        env = NormalizeVecObservation(env)
-        env = NormalizeVecReward(env, config["GAMMA"])
+        env = env_module.NormalizeVecObservation(env)
+        env = env_module.NormalizeVecReward(env, config["GAMMA"])
 
     def linear_schedule(count):
         frac = (
@@ -284,7 +306,6 @@ def make_train(config):
             metric = mem_batch.info
             rng = update_state[-1]
 
-            # jax.debug.breakpoint()
             if config.get("DEBUG"):
 
                 def callback(info):
@@ -323,6 +344,10 @@ if __name__ == "__main__":
     parser.add_argument(
         "--env_name", type=str, required=True, help="Name of the environment"
     )
+    parser.add_argument(
+        "--env_module", type=str, required=True, help="Module of the environment"
+    )
+
     args = parser.parse_args()
 
     config = {
@@ -340,6 +365,7 @@ if __name__ == "__main__":
         "VF_COEF": 0.5,
         "MAX_GRAD_NORM": 0.5,
         "ACTIVATION": "tanh",
+        "ENV_MODULE": args.env_module,
         "ANNEAL_LR": True,
         "NORMALIZE_ENV": True,
         "DEBUG": True,

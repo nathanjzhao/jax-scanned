@@ -1,6 +1,7 @@
 """Runs inference for the trained model."""
 
 import argparse
+import importlib
 import pickle
 from typing import Any, Tuple
 
@@ -8,7 +9,6 @@ import jax
 import jax.numpy as jnp
 import mediapy as media
 
-from environment import HumanoidEnv
 from train import ActorCritic
 import os
 
@@ -52,9 +52,17 @@ def main() -> None:
     parser.add_argument(
         "--height", type=int, default=480, help="height of the video frame"
     )
+    parser.add_argument(
+        "--env_module", 
+        type=str, 
+        required=True, 
+        help="Name of the environment module to import."
+    )
     args = parser.parse_args()
 
-    env = HumanoidEnv()
+    env_module = importlib.import_module(args.env_module)
+
+    env = env_module.HumanoidEnv()
     rng = jax.random.PRNGKey(0)
 
     model_path = f"models/{args.env_name}_model.pkl"

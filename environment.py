@@ -37,13 +37,13 @@ REWARD_CONFIG = {
         "ctrl_cost": 0.1,
         "original_pos_reward": 1,
         "is_healthy": 5,
-        "action_smoothness_reward": 0.1,
+        "velocity": 1.25, 
     },
 }
 
 
-REPO_DIR = "dora"  # humanoid_original or stompy or dora
-XML_NAME = "dora2.xml"  # dora2
+REPO_DIR = "humanoid_original"  # humanoid_original or stompy or dora
+XML_NAME = "humanoid.xml"  # dora2
 
 # keyframe for default positions (or None for self.sys.qpos0)
 KEYFRAME_NAME = "default"
@@ -129,9 +129,10 @@ class HumanoidEnv(PipelineEnv):
         xml_path = os.path.join(environments_path, REPO_DIR, XML_NAME)
         mj_model: mujoco.MjModel = mujoco.MjModel.from_xml_path(xml_path)
 
-        mj_model.opt.solver = mujoco.mjtSolver.mjSOL_CG
-        mj_model.opt.iterations = 6
-        mj_model.opt.ls_iterations = 6
+        # can definitely look at this more https://mujoco.readthedocs.io/en/latest/APIreference/APItypes.html#mjtdisablebit
+        mj_model.opt.solver = mujoco.mjtSolver.mjSOL_NEWTON
+        mj_model.opt.iterations = 1
+        mj_model.opt.ls_iterations = 4
 
         self._action_size = mj_model.nu
         sys: base.System = mjcf.load_model(mj_model)
@@ -248,49 +249,33 @@ class HumanoidEnv(PipelineEnv):
             REWARD_CONFIG["height_limits"]["max_z"],
         )
 
-        exp_coef, subtraction_factor, max_diff_norm = (
-            REWARD_CONFIG["original_pos_reward"]["exp_coefficient"],
-            REWARD_CONFIG["original_pos_reward"]["subtraction_factor"],
-            REWARD_CONFIG["original_pos_reward"]["max_diff_norm"],
-        )
+        # exp_coef, subtraction_factor, max_diff_norm = (
+        #     REWARD_CONFIG["original_pos_reward"]["exp_coefficient"],
+        #     REWARD_CONFIG["original_pos_reward"]["subtraction_factor"],
+        #     REWARD_CONFIG["original_pos_reward"]["max_diff_norm"],
+        # )
 
         # HEALTHY REWARD
         is_healthy = jnp.where(state.q[2] < min_z, 0.0, 1.0)
         is_healthy = jnp.where(state.q[2] > max_z, 0.0, is_healthy)
 
         # MAINTAINING ORIGINAL POSITION REWARD
-        qpos0_diff = self.initial_qpos - state.qpos
-        original_pos_reward = jnp.exp(
-            -exp_coef * jnp.linalg.norm(qpos0_diff)
-        ) - subtraction_factor * jnp.clip(jnp.linalg.norm(qpos0_diff), 0, max_diff_norm)
-
-        # LOW ACCELERATION REWARD
-        low_acc_reward = jnp.exp(-jnp.linalg.norm(state.qacc) * 3)
-        # jax.debug.print("sqacc {}, lacc {}", state.qacc, low_acc_reward)
-
-        # VELOCITY DIFF / dt MATCHES ACCELERATION REWARD
-        own_acc = (next_state.qvel - state.qvel)/ (self.dt * self._n_frames)
-        acc_diff = (own_acc - state.qacc) * 0.1
-        matching_acc_reward = jnp.exp(
-            - 2 * jnp.linalg.norm(acc_diff)
-        ) - 2 * jnp.clip(jnp.linalg.norm(acc_diff), 0, 0.5)
-        # jax.debug.print("sqacc {}, own_acc {}, acc_diff {}, matching reward {}", state.qacc, own_acc, acc_diff, matching_acc_reward)
+        # qpos0_diff = self.initial_qpos - state.qpos
+        # original_pos_reward = jnp.exp(
+        #     -exp_coef * jnp.linalg.norm(qpos0_diff)
+        # ) - subtraction_factor * jnp.clip(jnp.linalg.norm(qpos0_diff), 0, max_diff_norm)
 
 
+        ctrl_cost = -jnp.sum(jnp.square(action))
 
-        # CONTROL COST
-        ctrl_cost = 0  # BELOW ASSUMES DELTA CONTROLLER BUT MJX IS POSITIONAL
-        # ctrl_cost = -jnp.sum(jnp.square(action))
-
-        # xpos = state.subtree_com[1][0]
-        # next_xpos = next_state.subtree_com[1][0]
-        # velocity = (next_xpos - xpos) / self.dt
+        xpos = state.subtree_com[1][0]
+        next_xpos = next_state.subtree_com[1][0]
+        velocity = (next_xpos - xpos) / self.dt
 
         total_reward = (
             REWARD_CONFIG["weights"]["ctrl_cost"] * ctrl_cost
-            + REWARD_CONFIG["weights"]["original_pos_reward"] * original_pos_reward
-            # + 0.2 * low_acc_reward
-            # + 0.2 * matching_acc_reward
+            # + REWARD_CONFIG["weights"]["original_pos_reward"] * original_pos_reward
+            + REWARD_CONFIG["weights"]["ctrl_cost"] * velocity
             + REWARD_CONFIG["weights"]["is_healthy"] * is_healthy
         )
 
@@ -302,10 +287,19 @@ class HumanoidEnv(PipelineEnv):
         # Get the height of the robot's center of mass
         com_height = state.q[2]
 
-        # Set a termination threshold
-        termination_height = REWARD_CONFIG["termination_height"]
+        min_z, max_z = (
+            REWARD_CONFIG["height_limits"]["min_z"],
+            REWARD_CONFIG["height_limits"]["max_z"],
+        )
+        height_condition = jnp.logical_not(jnp.logical_and(min_z < com_height, com_height < max_z))
 
-        return com_height < termination_height
+        # Check if any element in qvel or qacc exceeds 1e5
+        velocity_condition = jnp.any(jnp.abs(state.qvel) > 1e5)
+
+        # Combine conditions
+        condition = jnp.logical_or(height_condition, velocity_condition)
+
+        return condition
 
     @partial(jax.jit, static_argnums=(0,))
     def get_obs(self, data: MjxState, action: jnp.ndarray) -> jnp.ndarray:

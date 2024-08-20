@@ -1,4 +1,5 @@
 import argparse
+import importlib
 import os
 import pickle
 import jax
@@ -11,12 +12,12 @@ from typing import Sequence, NamedTuple
 from flax.training.train_state import TrainState
 import distrax
 from brax.envs import State
-from environment import HumanoidEnv
+from environment_walk import HumanoidEnv
 
 # print(dir(jax.config))
-jax.config.update("jax_debug_nans", True)
-jax.config.update("jax_enable_x64", True)
-jax.config.update("jax_default_matmul_precision", "highest")
+# jax.config.update("jax_debug_nans", True)
+# jax.config.update("jax_enable_x64", True)
+# jax.config.update("jax_default_matmul_precision", "highest")
 
 
 class ActorCritic(nn.Module):
@@ -34,7 +35,7 @@ class ActorCritic(nn.Module):
         )(x)
         actor_mean = activation(actor_mean)
         actor_mean = nn.Dense(
-            256, kernel_init=orthogonal(np.sqrt(2)), bias_init=constant(0.0)
+            128, kernel_init=orthogonal(np.sqrt(2)), bias_init=constant(0.0)
         )(actor_mean)
         actor_mean = activation(actor_mean)
         actor_mean = nn.Dense(
@@ -81,14 +82,10 @@ def make_train(config):
     config["MINIBATCH_SIZE"] = (
         config["NUM_ENVS"] * config["NUM_STEPS"] // config["NUM_MINIBATCHES"]
     )
-    env = HumanoidEnv()
-    # env = LogWrapper(env)
-    # env = ClipAction(env)
-    # env = VecEnv(env)
 
-    # if config["NORMALIZE_ENV"]:
-    #     env = NormalizeVecObservation(env)
-    #     env = NormalizeVecReward(env, config["GAMMA"])
+    env_module = importlib.import_module(config["ENV_MODULE"])
+
+    env = env_module.HumanoidEnv()
 
     def linear_schedule(count):
         frac = (
@@ -341,6 +338,9 @@ if __name__ == "__main__":
     parser.add_argument(
         "--env_name", type=str, required=True, help="Name of the environment"
     )
+    parser.add_argument(
+        "--env_module", type=str, required=True, help="Module of the environment"
+    )
     args = parser.parse_args()
 
     config = {
@@ -348,7 +348,7 @@ if __name__ == "__main__":
         "NUM_ENVS": 2048,
         "NUM_STEPS": 10,
         # "TOTAL_TIMESTEPS": 2048 * 2000,
-        "TOTAL_TIMESTEPS": 5e8,
+        "TOTAL_TIMESTEPS": 1e9,
         "UPDATE_EPOCHS": 4,
         "NUM_MINIBATCHES": 32,
         "GAMMA": 0.99,
@@ -358,6 +358,7 @@ if __name__ == "__main__":
         "VF_COEF": 0.5,
         "MAX_GRAD_NORM": 0.5,
         "ACTIVATION": "tanh",
+        "ENV_MODULE": args.env_module,
         "ANNEAL_LR": True,
         "NORMALIZE_ENV": True,
         "DEBUG": True,
