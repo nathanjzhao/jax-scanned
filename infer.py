@@ -1,14 +1,14 @@
 """Runs inference for the trained model."""
 
 import argparse
+import importlib
 import pickle
-from typing import Any, Tuple
+from typing import Any
 
 import jax
 import jax.numpy as jnp
 import mediapy as media
 
-from environment import HumanoidEnv
 from train import ActorCritic
 import os
 
@@ -52,9 +52,17 @@ def main() -> None:
     parser.add_argument(
         "--height", type=int, default=480, help="height of the video frame"
     )
+    parser.add_argument(
+        "--env_module",
+        type=str,
+        required=True,
+        help="Name of the environment module to import.",
+    )
     args = parser.parse_args()
 
-    env = HumanoidEnv()
+    env_module = importlib.import_module(args.env_module)
+
+    env = env_module.HumanoidEnv()
     rng = jax.random.PRNGKey(0)
 
     model_path = f"models/{args.env_name}_model.pkl"
@@ -85,8 +93,7 @@ def main() -> None:
         action = pi.sample(seed=_rng)
 
         rng, _rng = jax.random.split(rng)
-        clipped_action = jnp.clip(action, -1, 1)
-        state = step_fn(state, clipped_action, _rng)
+        state = step_fn(state, action, _rng)
 
         total_reward += state.reward
         episode_reward += state.reward
@@ -124,15 +131,16 @@ def main() -> None:
     total_reward /= max_frames
     print(f"Average reward: {total_reward}")
 
+    print(f"Rendering video with {len(rollout)} frames at {fps} fps")
     images = jnp.array(
         env.render(
             rollout[:: args.render_every],
-            camera="side",
             width=args.width,
             height=args.height,
         )
     )
-    print(f"Rendering video with {len(images)} frames at {fps} fps")
+
+    print("Video rendered")
     media.write_video(video_path, images, fps=fps)
     print(f"Video saved to {video_path}")
 

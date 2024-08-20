@@ -1,0 +1,18 @@
+hypothesis: qacc is too high becuase position encoding
+- clamping qvel doesn't even do anything (tested with using adhoc random events). annoying.
+- mjpython mujoco viewer does not have the same problem -- qaccs aren't extremely large
+
+- added tanh bijector
+- also increase hidden layer sizes as getting close to end (similar to isasaclab)
+
+- i think observations in infer_wrapper not being normalized across MULTIPLE environments might be problem
+
+TODO:
+- do delta from original position instead of velocity reward
+
+
+bro.
+
+its cheating velocity reward by just moving arms LOL -- better to stick to non-wrapper for now
+see videos/walking_no_wrapepr2_with_hasrher_is_done_video.mp4
+

@@ -9,6 +9,8 @@ import tensorflowjs as tfjs
 from train import ActorCritic
 import numpy as np
 
+# May need specifically tensorflow==2.16.2
+
 # IMPORTANT !
 # SET TF_USE_LEGACY_KERAS=1 since tensorflowjs does not support Keras models built from Python with TensorFlow 2.0
 
@@ -75,14 +77,14 @@ tf_model = create_actor_critic_model(input_dim, action_dim)
 # Build the model
 tf_model.build((None, input_dim))
 
-# Step 3: Create a mapping between Flax and TensorFlow layer names
+# Create a mapping between Flax and TensorFlow layer names
 layer_mapping = {
     "actor_dense1": "Dense_0",
     "actor_dense2": "Dense_1",
     "actor_mean": "Dense_2",
 }
 
-# Step 4: Set the weights of the TF model
+# Set the weights of the TF model
 for layer in tf_model.layers[1:]:  # Skip the Input layer
     flax_layer_name = layer_mapping[layer.name]
 
@@ -100,6 +102,6 @@ for layer in tf_model.layers[1:]:  # Skip the Input layer
 #     log_std = jax.numpy.array(flax_params_flat[log_std_key])
 #     tf_model.log_std = tf.Variable(initial_value=log_std, trainable=True, name="log_std")
 
-# Step 5: Save the model in TensorFlow.js format
+# Save the model in TensorFlow.js format
 tfjs.converters.save_keras_model(tf_model, f"tfjs_models/{args.env_name}")
 print("Model saved in TensorFlow.js format")
