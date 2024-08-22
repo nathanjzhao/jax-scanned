@@ -319,6 +319,4 @@ if __name__ == "__main__":
     train_jit = jax.jit(make_train(config))
     out = train_jit(rng)
 
-    save_model(
-        out["runner_state"][0].params, "models/purejax_ppo_continuous_model.pkl"
-    )
+    save_model(out["runner_state"][0].params, "models/purejax_ppo_continuous_model.pkl")

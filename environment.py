@@ -30,7 +30,6 @@ REWARD_CONFIG = {
         "subtraction_factor": 0.2,
         "max_diff_norm": 0.5,
     },
-    "ctrl_cost_coefficient": 0.1,
     "weights": {
         "ctrl_cost": 0.1,
         "original_pos_reward": 1,
@@ -128,9 +127,9 @@ class HumanoidEnv(PipelineEnv):
         mj_model: mujoco.MjModel = mujoco.MjModel.from_xml_path(xml_path)
 
         # can definitely look at this more https://mujoco.readthedocs.io/en/latest/APIreference/APItypes.html#mjtdisablebit
-        mj_model.opt.solver = mujoco.mjtSolver.mjSOL_NEWTON
-        mj_model.opt.iterations = 1
-        mj_model.opt.ls_iterations = 4
+        mj_model.opt.solver = mujoco.mjtSolver.mjSOL_CG
+        mj_model.opt.iterations = 6
+        mj_model.opt.ls_iterations = 6
 
         self._action_size = mj_model.nu
         sys: base.System = mjcf.load_model(mj_model)
@@ -254,21 +253,21 @@ class HumanoidEnv(PipelineEnv):
             REWARD_CONFIG["height_limits"]["max_z"],
         )
 
-        # exp_coef, subtraction_factor, max_diff_norm = (
-        #     REWARD_CONFIG["original_pos_reward"]["exp_coefficient"],
-        #     REWARD_CONFIG["original_pos_reward"]["subtraction_factor"],
-        #     REWARD_CONFIG["original_pos_reward"]["max_diff_norm"],
-        # )
+        exp_coef, subtraction_factor, max_diff_norm = (
+            REWARD_CONFIG["original_pos_reward"]["exp_coefficient"],
+            REWARD_CONFIG["original_pos_reward"]["subtraction_factor"],
+            REWARD_CONFIG["original_pos_reward"]["max_diff_norm"],
+        )
+
+        # MAINTAINING ORIGINAL POSITION REWARD
+        qpos0_diff = self.initial_qpos - state.qpos
+        original_pos_reward = jnp.exp(
+            -exp_coef * jnp.linalg.norm(qpos0_diff)
+        ) - subtraction_factor * jnp.clip(jnp.linalg.norm(qpos0_diff), 0, max_diff_norm)
 
         # HEALTHY REWARD
         is_healthy = jnp.where(state.q[2] < min_z, 0.0, 1.0)
         is_healthy = jnp.where(state.q[2] > max_z, 0.0, is_healthy)
-
-        # MAINTAINING ORIGINAL POSITION REWARD
-        # qpos0_diff = self.initial_qpos - state.qpos
-        # original_pos_reward = jnp.exp(
-        #     -exp_coef * jnp.linalg.norm(qpos0_diff)
-        # ) - subtraction_factor * jnp.clip(jnp.linalg.norm(qpos0_diff), 0, max_diff_norm)
 
         ctrl_cost = -jnp.sum(jnp.square(action))
 
@@ -278,8 +277,8 @@ class HumanoidEnv(PipelineEnv):
 
         total_reward = (
             REWARD_CONFIG["weights"]["ctrl_cost"] * ctrl_cost
-            # + REWARD_CONFIG["weights"]["original_pos_reward"] * original_pos_reward
-            + REWARD_CONFIG["weights"]["ctrl_cost"] * velocity
+            + REWARD_CONFIG["weights"]["original_pos_reward"] * original_pos_reward
+            # + REWARD_CONFIG["weights"]["velocity"] * velocity
             + REWARD_CONFIG["weights"]["is_healthy"] * is_healthy
         )
 

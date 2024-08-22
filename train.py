@@ -338,7 +338,10 @@ if __name__ == "__main__":
         "--env_name", type=str, required=True, help="Name of the environment"
     )
     parser.add_argument(
-        "--env_module", type=str, required=True, help="Module of the environment"
+        "--env_module",
+        type=str,
+        default="environment",
+        help="Module of the environment",
     )
     args = parser.parse_args()
 
@@ -347,7 +350,7 @@ if __name__ == "__main__":
         "NUM_ENVS": 2048,
         "NUM_STEPS": 10,
         # "TOTAL_TIMESTEPS": 2048 * 2000,
-        "TOTAL_TIMESTEPS": 1e9,
+        "TOTAL_TIMESTEPS": 5e8,
         "UPDATE_EPOCHS": 4,
         "NUM_MINIBATCHES": 32,
         "GAMMA": 0.99,

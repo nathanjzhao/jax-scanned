@@ -55,7 +55,7 @@ def main() -> None:
     parser.add_argument(
         "--env_module",
         type=str,
-        required=True,
+        default="environment",
         help="Name of the environment module to import.",
     )
     args = parser.parse_args()
