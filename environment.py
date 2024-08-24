@@ -27,13 +27,13 @@ REWARD_CONFIG = {
     "is_healthy_reward": 5,
     "original_pos_reward": {
         "exp_coefficient": 2,
-        "subtraction_factor": 0.2,
+        "subtraction_factor": 0.05,
         "max_diff_norm": 0.5,
     },
     "weights": {
         "ctrl_cost": 0.1,
-        "original_pos_reward": 1,
-        "is_healthy": 5,
+        "original_pos_reward": 4,
+        "is_healthy": 1,
         "velocity": 1.25,
     },
 }
@@ -275,11 +275,20 @@ class HumanoidEnv(PipelineEnv):
         next_xpos = next_state.subtree_com[1][0]
         velocity = (next_xpos - xpos) / self.dt
 
+
+        # Calculate and print each weight * reward pairing
+        ctrl_cost_weighted = REWARD_CONFIG["weights"]["ctrl_cost"] * ctrl_cost
+        original_pos_reward_weighted = REWARD_CONFIG["weights"]["original_pos_reward"] * original_pos_reward
+        velocity_weighted = REWARD_CONFIG["weights"]["velocity"] * velocity
+        is_healthy_weighted = REWARD_CONFIG["weights"]["is_healthy"] * is_healthy
+
+        # jax.debug.print("ctrl_cost_weighted: {}, original_pos_reward_weighted: {}, is_healthy_weighted {}, velocity_weighted: {}", ctrl_cost_weighted, original_pos_reward_weighted, is_healthy_weighted, velocity_weighted)
+
         total_reward = (
-            REWARD_CONFIG["weights"]["ctrl_cost"] * ctrl_cost
-            + REWARD_CONFIG["weights"]["original_pos_reward"] * original_pos_reward
-            # + REWARD_CONFIG["weights"]["velocity"] * velocity
-            + REWARD_CONFIG["weights"]["is_healthy"] * is_healthy
+            ctrl_cost_weighted
+            + original_pos_reward_weighted
+            + velocity_weighted
+            + is_healthy_weighted
         )
 
         return total_reward
@@ -431,7 +440,7 @@ def run_environment_adhoc() -> None:
     images = jnp.array(
         env.render(
             rollout[:: args.render_every],
-            # camera="side",
+            camera="side",
             width=args.width,
             height=args.height,
         )
