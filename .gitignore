@@ -14,3 +14,4 @@ scratch/
 *.mp4
 tfjs_models/
 scratch_video/
+pytorch
