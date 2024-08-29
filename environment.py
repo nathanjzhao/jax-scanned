@@ -48,7 +48,7 @@ print(f"using {KEYFRAME_NAME} from {REPO_DIR}/{XML_NAME}")
 
 # my testing :)
 INCLUDE_C_VALS = True
-PHYSICS_FRAMES = 1
+PHYSICS_FRAMES = 4
 
 
 def download_model_files(repo_url: str, repo_dir: str, local_path: str) -> None:
@@ -287,7 +287,7 @@ class HumanoidEnv(PipelineEnv):
         total_reward = (
             ctrl_cost_weighted
             + original_pos_reward_weighted
-            + velocity_weighted
+            # + velocity_weighted
             + is_healthy_weighted
         )
 
