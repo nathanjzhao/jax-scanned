@@ -1,0 +1,8 @@
+sholud probably find some time to test if better otpimizer (noslip tolerance) improvers nans
+
+- nan causes
+-allowing more frame steps between action inputs
+- weighting velocity too high
+
+training with better starting position (closer to gorund) with exponentials
+--> however i should probably increase ctrl cost or something

@@ -22,47 +22,23 @@ from brax.mjx.base import State as MjxState
 logger = logging.getLogger(__name__)
 
 REWARD_CONFIG = {
-    "termination_height": 0.2,
-    "height_limits": {"min_z": 0.2, "max_z": 2.0},
+    "termination_height": -0.2,
+    "height_limits": {"min_z": -0.2, "max_z": 2.0},
     "original_pos_reward": {
         "exp_coefficient": 2,
         "subtraction_factor": 0.05,
         "max_diff_norm": 0.5,
     },
-    "orientation_reward": {
-        "exp_coefficient": 1,
-    },
     "weights": {
-        "ctrl_cost": 0.1,  
+        "ctrl_cost": 0.1,
         "original_pos_reward": 4,
-        "orientation": 1,
+        "is_healthy": 1,
         "velocity": 1.25,
     },
 }
 
-
-# humanoid config
-# REWARD_CONFIG = {
-#     "termination_height": 0.2,
-#     "height_limits": {"min_z": 0.2, "max_z": 2.0},
-#     "is_healthy_reward": 5,
-#     "original_pos_reward": {
-#         "exp_coefficient": 2,
-#         "subtraction_factor": 0.05,
-#         "max_diff_norm": 0.5,
-#     },
-#     "weights": {
-#         "ctrl_cost": 0.1,
-#         "original_pos_reward": 4,
-#         "is_healthy": 1,
-#         "velocity": 1.25,
-#     },
-# }
-
-
-
-REPO_DIR = "dora"  # humanoid_original or stompy or dora
-XML_NAME = "dora2.xml"  # dora2
+REPO_DIR = "humanoid_original"  # humanoid_original or stompy or dora
+XML_NAME = "humanoid.xml"  # dora2
 
 # keyframe for default positions (or None for self.sys.qpos0)
 KEYFRAME_NAME = "default"
@@ -131,7 +107,7 @@ class HumanoidEnv(PipelineEnv):
 
     initial_qpos: jnp.ndarray
     _action_size: int
-    reset_noise_scale: float = 0.0
+    reset_noise_scale: float = 1e-4
 
     def __init__(self, n_frames: int = PHYSICS_FRAMES, backend: str = "mjx") -> None:
         """Initializes system with initial joint positions, action size, the model, and update rate."""
@@ -149,9 +125,12 @@ class HumanoidEnv(PipelineEnv):
         mj_model: mujoco.MjModel = mujoco.MjModel.from_xml_path(xml_path)
 
         # can definitely look at this more https://mujoco.readthedocs.io/en/latest/APIreference/APItypes.html#mjtdisablebit
+        # stability increase
         mj_model.opt.solver = mujoco.mjtSolver.mjSOL_CG
-        mj_model.opt.iterations = 6
-        mj_model.opt.ls_iterations = 6
+        mj_model.opt.iterations = 10  
+        mj_model.opt.ls_iterations = 10  
+        mj_model.opt.tolerance = 1e-8  
+        mj_model.opt.noslip_tolerance = 1e-6  
 
         self._action_size = mj_model.nu
         sys: base.System = mjcf.load_model(mj_model)
@@ -166,24 +145,6 @@ class HumanoidEnv(PipelineEnv):
         except:
             self.initial_qpos = jnp.array(sys.qpos0)
             print("No keyframe found, utilizing qpos0")
-
-
-        # # Store body names
-        # self.body_names = []
-        # print("Body names in the model:")
-        # for i in range(mj_model.nbody):
-        #     body_name = mj_model.body(i).name
-        #     self.body_names.append(body_name)
-        #     print(f"Body {i}: {body_name}")
-
-        # # Print xmat information
-        # initial_state = self.pipeline_init(self.initial_qpos, jnp.zeros(self.sys.nv,))
-        # print("\nxmat information:")
-        # print(f"xmat shape: {initial_state.xmat.shape}")
-        # for i, (name, xmat) in enumerate(zip(self.body_names, initial_state.xmat)):
-        #     print(f"Body {i} ({name}):")
-        #     print(xmat)
-        #     print()
 
         actuator_ctrlrange = []
         for i in range(mj_model.nu):
@@ -327,13 +288,11 @@ class HumanoidEnv(PipelineEnv):
             -exp_coef * jnp.linalg.norm(qpos0_diff)
         ) - subtraction_factor * jnp.clip(jnp.linalg.norm(qpos0_diff), 0, max_diff_norm)
 
-        torso_orientation = state.xmat[1].reshape(3, 3) # assuming torso second body
-        gravity_vector = jnp.array([0, 0, -1])  # Assuming z-up coordinate system
-        projected_gravity = jnp.dot(torso_orientation.T, gravity_vector)
-
         # HEALTHY REWARD
-        orientation = jnp.exp(-jnp.linalg.norm(projected_gravity) * REWARD_CONFIG["orientation_reward"]["exp_coefficient"])
-        ctrl_cost = -jnp.exp(-jnp.linalg.norm(action))
+        is_healthy = jnp.where(state.q[2] < min_z, 0.0, 1.0)
+        is_healthy = jnp.where(state.q[2] > max_z, 0.0, is_healthy)
+
+        ctrl_cost = -jnp.sum(jnp.square(action))
 
         xpos = state.subtree_com[1][0]
         next_xpos = next_state.subtree_com[1][0]
@@ -344,41 +303,16 @@ class HumanoidEnv(PipelineEnv):
         ctrl_cost_weighted = REWARD_CONFIG["weights"]["ctrl_cost"] * ctrl_cost
         original_pos_reward_weighted = REWARD_CONFIG["weights"]["original_pos_reward"] * original_pos_reward
         velocity_weighted = REWARD_CONFIG["weights"]["velocity"] * velocity
-        orientation_weighted = REWARD_CONFIG["weights"]["orientation"] * orientation
+        is_healthy_weighted = REWARD_CONFIG["weights"]["is_healthy"] * is_healthy
 
+        # jax.debug.print("ctrl_cost_weighted: {}, original_pos_reward_weighted: {}, is_healthy_weighted {}, velocity_weighted: {}", ctrl_cost_weighted, original_pos_reward_weighted, is_healthy_weighted, velocity_weighted)
 
         total_reward = (
             ctrl_cost_weighted
             + original_pos_reward_weighted
             # + velocity_weighted
-            + orientation_weighted
+            + is_healthy_weighted
         )
-
-
-        # # Calculate proportions
-        # ctrl_cost_prop = ctrl_cost_weighted / total_reward
-        # original_pos_prop = original_pos_reward_weighted / total_reward
-        # velocity_prop = velocity_weighted / total_reward
-        # orientation_prop = orientation_weighted / total_reward
-
-
-        # # Print proportions
-        # jax.debug.print(
-        #     "Reward proportions: total_reward: {}, ctrl_cost: {}, original_pos: {}, orientation: {}",
-        #     total_reward,
-        #     ctrl_cost_prop,
-        #     original_pos_prop,
-        #     orientation_prop
-        # )
-
-        # # Print proportions
-        # jax.debug.print(
-        #     "Reward proportions: ctrl_cost: {:.2f}, original_pos: {:.2f}, velocity: {:.2f}, orientation: {:.2f}",
-        #     ctrl_cost_prop,
-        #     original_pos_prop,
-        #     velocity_prop,
-        #     orientation_prop
-        # )
 
         return total_reward
 
@@ -396,13 +330,7 @@ class HumanoidEnv(PipelineEnv):
             jnp.logical_and(min_z < com_height, com_height < max_z)
         )
 
-        # Check if any element in qvel or qacc exceeds 1e5
-        velocity_condition = jnp.any(jnp.abs(state.qvel) > 1e5)
-
-        # Combine conditions
-        condition = jnp.logical_or(height_condition, velocity_condition)
-
-        return condition
+        return height_condition
 
     @partial(jax.jit, static_argnums=(0,))
     def get_obs(self, data: MjxState, action: jnp.ndarray) -> jnp.ndarray:

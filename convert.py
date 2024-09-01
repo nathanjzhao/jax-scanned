@@ -123,16 +123,4 @@ for layer in tf_model.layers[1:]:  # Skip the Input layer
 
 # Save the model in TensorFlow.js format
 tfjs.converters.save_keras_model(tf_model, f"tfjs_models/{args.env_name}")
-print("Model saved in TensorFlow.js format")
-
-# Save custom objects
-import json
-custom_objects = {
-    "LogStdLayer": {
-        "class_name": "LogStdLayer",
-        "config": {"action_dim": action_dim}
-    }
-}
-with open(f"tfjs_models/{args.env_name}/custom_objects.json", "w") as f:
-    json.dump(custom_objects, f)
-print("Custom objects saved")
+print("Model saved in TensorFlow.js format") 
