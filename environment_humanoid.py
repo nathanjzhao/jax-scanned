@@ -24,14 +24,14 @@ logger = logging.getLogger(__name__)
 REWARD_CONFIG = {
     "termination_height": -0.2,
     "height_limits": {"min_z": -0.2, "max_z": 2.0},
-    "original_pos_reward": {
+    "original_pos": {
         "exp_coefficient": 2,
         "subtraction_factor": 0.05,
         "max_diff_norm": 0.5,
     },
     "weights": {
         "ctrl_cost": 0.1,
-        "original_pos_reward": 4,
+        "original_pos": 4,
         "is_healthy": 1,
         "velocity": 1.25,
     },
@@ -277,14 +277,14 @@ class HumanoidEnv(PipelineEnv):
         )
 
         exp_coef, subtraction_factor, max_diff_norm = (
-            REWARD_CONFIG["original_pos_reward"]["exp_coefficient"],
-            REWARD_CONFIG["original_pos_reward"]["subtraction_factor"],
-            REWARD_CONFIG["original_pos_reward"]["max_diff_norm"],
+            REWARD_CONFIG["original_pos"]["exp_coefficient"],
+            REWARD_CONFIG["original_pos"]["subtraction_factor"],
+            REWARD_CONFIG["original_pos"]["max_diff_norm"],
         )
 
         # MAINTAINING ORIGINAL POSITION REWARD
         qpos0_diff = self.initial_qpos - state.qpos
-        original_pos_reward = jnp.exp(
+        original_pos = jnp.exp(
             -exp_coef * jnp.linalg.norm(qpos0_diff)
         ) - subtraction_factor * jnp.clip(jnp.linalg.norm(qpos0_diff), 0, max_diff_norm)
 
@@ -301,15 +301,15 @@ class HumanoidEnv(PipelineEnv):
 
         # Calculate and print each weight * reward pairing
         ctrl_cost_weighted = REWARD_CONFIG["weights"]["ctrl_cost"] * ctrl_cost
-        original_pos_reward_weighted = REWARD_CONFIG["weights"]["original_pos_reward"] * original_pos_reward
+        original_pos_weighted = REWARD_CONFIG["weights"]["original_pos"] * original_pos
         velocity_weighted = REWARD_CONFIG["weights"]["velocity"] * velocity
         is_healthy_weighted = REWARD_CONFIG["weights"]["is_healthy"] * is_healthy
 
-        # jax.debug.print("ctrl_cost_weighted: {}, original_pos_reward_weighted: {}, is_healthy_weighted {}, velocity_weighted: {}", ctrl_cost_weighted, original_pos_reward_weighted, is_healthy_weighted, velocity_weighted)
+        # jax.debug.print("ctrl_cost_weighted: {}, original_pos_weighted: {}, is_healthy_weighted {}, velocity_weighted: {}", ctrl_cost_weighted, original_pos_weighted, is_healthy_weighted, velocity_weighted)
 
         total_reward = (
             ctrl_cost_weighted
-            + original_pos_reward_weighted
+            + original_pos_weighted
             # + velocity_weighted
             + is_healthy_weighted
         )

@@ -24,7 +24,7 @@ logger = logging.getLogger(__name__)
 REWARD_CONFIG = {
     "termination_height": 0.2,
     "height_limits": {"min_z": 0.2, "max_z": 2.0},
-    "original_pos_reward": {
+    "original_pos": {
         "exp_coefficient": 2,
         "subtraction_factor": 0.05,
         "max_diff_norm": 0.5,
@@ -34,31 +34,12 @@ REWARD_CONFIG = {
     },
     "weights": {
         "ctrl_cost": 0.1,  
-        "original_pos_reward": 4,
-        "orientation": 1,
+        "original_pos": 4,
+        "orientation": 0.5,
         "velocity": 1.25,
+        "height": 0.5,
     },
 }
-
-
-# humanoid config
-# REWARD_CONFIG = {
-#     "termination_height": 0.2,
-#     "height_limits": {"min_z": 0.2, "max_z": 2.0},
-#     "is_healthy_reward": 5,
-#     "original_pos_reward": {
-#         "exp_coefficient": 2,
-#         "subtraction_factor": 0.05,
-#         "max_diff_norm": 0.5,
-#     },
-#     "weights": {
-#         "ctrl_cost": 0.1,
-#         "original_pos_reward": 4,
-#         "is_healthy": 1,
-#         "velocity": 1.25,
-#     },
-# }
-
 
 
 REPO_DIR = "dora"  # humanoid_original or stompy or dora
@@ -316,60 +297,66 @@ class HumanoidEnv(PipelineEnv):
         )
 
         exp_coef, subtraction_factor, max_diff_norm = (
-            REWARD_CONFIG["original_pos_reward"]["exp_coefficient"],
-            REWARD_CONFIG["original_pos_reward"]["subtraction_factor"],
-            REWARD_CONFIG["original_pos_reward"]["max_diff_norm"],
+            REWARD_CONFIG["original_pos"]["exp_coefficient"],
+            REWARD_CONFIG["original_pos"]["subtraction_factor"],
+            REWARD_CONFIG["original_pos"]["max_diff_norm"],
         )
 
         # MAINTAINING ORIGINAL POSITION REWARD
         qpos0_diff = self.initial_qpos - state.qpos
-        original_pos_reward = jnp.exp(
+        original_pos = jnp.exp(
             -exp_coef * jnp.linalg.norm(qpos0_diff)
         ) - subtraction_factor * jnp.clip(jnp.linalg.norm(qpos0_diff), 0, max_diff_norm)
 
         torso_orientation = state.xmat[1].reshape(3, 3) # assuming torso second body
         gravity_vector = jnp.array([0, 0, -1])  # Assuming z-up coordinate system
         projected_gravity = jnp.dot(torso_orientation.T, gravity_vector)
+        orientation = jnp.exp(-jnp.linalg.norm(projected_gravity[:2]) * REWARD_CONFIG["orientation_reward"]["exp_coefficient"])
 
-        # HEALTHY REWARD
-        orientation = jnp.exp(-jnp.linalg.norm(projected_gravity) * REWARD_CONFIG["orientation_reward"]["exp_coefficient"])
+        
         ctrl_cost = -jnp.exp(-jnp.linalg.norm(action))
 
         xpos = state.subtree_com[1][0]
         next_xpos = next_state.subtree_com[1][0]
         velocity = (next_xpos - xpos) / self.dt
 
+        height = state.qpos[2]
 
         # Calculate and print each weight * reward pairing
         ctrl_cost_weighted = REWARD_CONFIG["weights"]["ctrl_cost"] * ctrl_cost
-        original_pos_reward_weighted = REWARD_CONFIG["weights"]["original_pos_reward"] * original_pos_reward
+        original_pos_weighted = REWARD_CONFIG["weights"]["original_pos"] * original_pos
         velocity_weighted = REWARD_CONFIG["weights"]["velocity"] * velocity
         orientation_weighted = REWARD_CONFIG["weights"]["orientation"] * orientation
+        height_weighted = REWARD_CONFIG["weights"]["height"] * height
 
 
+        jax.debug.print("orientation_weighted {}", orientation_weighted)
         total_reward = (
             ctrl_cost_weighted
-            + original_pos_reward_weighted
+            + original_pos_weighted
             # + velocity_weighted
             + orientation_weighted
+            + height_weighted
         )
 
 
-        # # Calculate proportions
-        # ctrl_cost_prop = ctrl_cost_weighted / total_reward
-        # original_pos_prop = original_pos_reward_weighted / total_reward
-        # velocity_prop = velocity_weighted / total_reward
-        # orientation_prop = orientation_weighted / total_reward
+        # Calculate proportions
+        ctrl_cost_prop = ctrl_cost_weighted / total_reward
+        original_pos_prop = original_pos_weighted / total_reward
+        velocity_prop = velocity_weighted / total_reward
+        orientation_prop = orientation_weighted / total_reward
+        height_prop = height_weighted / total_reward
 
 
-        # # Print proportions
-        # jax.debug.print(
-        #     "Reward proportions: total_reward: {}, ctrl_cost: {}, original_pos: {}, orientation: {}",
-        #     total_reward,
-        #     ctrl_cost_prop,
-        #     original_pos_prop,
-        #     orientation_prop
-        # )
+        # Print proportions
+        jax.debug.print(
+            "Reward proportions: total_reward: {}, ctrl_cost: {}, original_pos: {}, orientation: {}, height: {}",
+            total_reward,
+            ctrl_cost_prop,
+            original_pos_prop,
+            orientation_prop,
+            height_prop
+        )
 
         # # Print proportions
         # jax.debug.print(
