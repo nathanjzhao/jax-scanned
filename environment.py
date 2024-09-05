@@ -130,9 +130,9 @@ class HumanoidEnv(PipelineEnv):
         mj_model: mujoco.MjModel = mujoco.MjModel.from_xml_path(xml_path)
 
         # can definitely look at this more https://mujoco.readthedocs.io/en/latest/APIreference/APItypes.html#mjtdisablebit
-        mj_model.opt.solver = mujoco.mjtSolver.mjSOL_CG
-        mj_model.opt.iterations = 6
-        mj_model.opt.ls_iterations = 6
+        mj_model.opt.solver = mujoco.mjtSolver.mjSOL_NEWTON
+        mj_model.opt.iterations = 10
+        mj_model.opt.ls_iterations = 10
 
         self._action_size = mj_model.nu
         sys: base.System = mjcf.load_model(mj_model)
@@ -313,7 +313,6 @@ class HumanoidEnv(PipelineEnv):
         projected_gravity = jnp.dot(torso_orientation.T, gravity_vector)
         orientation = jnp.exp(-jnp.linalg.norm(projected_gravity[:2]) * REWARD_CONFIG["orientation_reward"]["exp_coefficient"])
 
-        
         ctrl_cost = -jnp.exp(-jnp.linalg.norm(action))
 
         xpos = state.subtree_com[1][0]
@@ -383,8 +382,8 @@ class HumanoidEnv(PipelineEnv):
             jnp.logical_and(min_z < com_height, com_height < max_z)
         )
 
-        # Check if any element in qvel or qacc exceeds 1e5
-        velocity_condition = jnp.any(jnp.abs(state.qvel) > 1e5)
+        # Check if any element in qvel or qacc exceeds 1e3
+        velocity_condition = jnp.any(jnp.abs(state.qvel) > 1e3)
 
         # Combine conditions
         condition = jnp.logical_or(height_condition, velocity_condition)
